@@ -1,8 +1,7 @@
 # RCA Studio II for MiSTer
 
-A MiSTer FPGA core for the monochrome **RCA Studio II** (1977). Incorporates 
-color-capable Studio III (a.k.a. MPT-02) clone support as a runtime toggle 
-(work ongoing).
+MiSTer FPGA core for the 2nd generation console **RCA Studio II** (1977). 
+Includes full Studio III (MPT-02) and Visicom support.
 
 ![status](https://img.shields.io/badge/status-playable-brightgreen)
 
@@ -10,34 +9,32 @@ color-capable Studio III (a.k.a. MPT-02) clone support as a runtime toggle
 
 ### Studio II
 
-* Studio II: 100% software compatibility across all known retail and homebrew titles.
-* CPU: CDP1802 is complete for Studio II software (including interrupts
+* Studio II: 100% software compatibility across known titles.
+* CPU: CDP1802 is complete for Studio family software (including interrupts
 and DMA) and runs at machine-cycle timing. 
-* Video: CDP1861 is complete for Studio II software; no visual issues observed. 
+* Video: CDP1861 is complete for Studio family software; no visual issues 
+observed. 
 * Sound: Beeper implemented; tuned to reference recordings.
-* Memory: Proper address bus decoding: ROM, cartridge and the 512 bytes of RAM are
-separate, hardware-accurate RAM mirroring.
+* Memory: Proper address bus decoding: ROM, cartridge and the 512 bytes of RAM 
+are separate, hardware-accurate RAM mirroring.
 
 ### Studio III
 
-* Studio III: PAL and NTSC are both implemented. They are different chipsets, not
-one part with two sets of timings: PAL is a CDP1864, NTSC is a CDP1861 with a
-CDP1862 for colour and a CDP1863 for tone. Pick the right one for your BIOS.
-* Video: CDP1864 PAL video is working; no visual issues observed.
-* Audio: CDP1864 audio is implemented and checked against the datasheet's
-division chain by `tools/tone-test.sh`, but not substantively play-tested.
+* Studio III: 100% software compatibility across known titles.
+* Video: CDP1862/CDP1864 color works properly on NTSC / PAL / Visicom; no 
+visual issues observed. 
+* Audio: CDP1863/CDP1864 audio is implemented; tuned to datasheet specs.
 
 ### Visicom COM-100
 
-Toshiba's 1978 Japanese machine, sold as a Studio III relative but really its own
-design. It is NTSC with the plain monochrome CDP1861, and gets colour a different
-way from every other machine here: DMA reads *two* bytes per cycle, 512 apart,
-and the two top bits pick one of four fixed colours. RAM sits at `$1000` and up
-rather than `$0800`, so the whole memory map moves with it.
+* Visicom: 100% software compatibility across known titles.
+* Video: Bespoke Visicom color implemented; no visual issues observed.
 
-All five built-in games and all six dumped cartridges run. The built-ins start on
-1 Doodle, 2 Bowling, 3 Patterns, 4 Freeway, 7 Addition; every cartridge starts on
-**0**, which is what the gamepad Start button presses on this machine.
+Toshiba's Japanese variant from 1978 has hardware design that notably diverges 
+from other Studio III clones. Runs at NTSC timing but lacks the usual CDP1862. 
+Color is instead implemented via DMA; two bytes are read per cycle, 512 
+apart, and the two top bits pick one of four fixed colours. RAM sits at 
+`$1000` rather than `$0800`.
 
 ## Features
 
@@ -48,18 +45,8 @@ All five built-in games and all six dumped cartridges run. The built-ins start o
 ## Current limitations
 
 * OSD settings do not save yet.
-* Analog and direct video are **emitted but unverified**. The core now produces a
-full TV raster (88x242 NTSC, 88x292 PAL) with the picture inside a
-background-coloured border, which is what the real parts do and what was missing
-before -- but nobody has yet connected an analog IO board to check. See
-`docs/analog-video.md` for the test procedure and what to do if it does not lock.
-One known deviation: the picture sits 16px from the left and 8px from the right,
-because centring it would mean moving the DMA phase the BIOS depends on.
-* The Visicom has no frame-by-frame *emulator* reference: `tools/refemu` models the
-Studio II and the two Studio IIIs only, so it is covered by
-`tools/visicom-test.sh` instead. It does have a hardware one --
-`refvideo/Freeway [Toshiba Visicom COM-100 Longplay] (1978).mp4` -- which the
-core matches structurally and which settled its palette.
+* Analog and direct video are implemented (88x242 NTSC, 88x292 PAL), but have 
+not yet been tested.
 
 ## Installing
 
@@ -138,10 +125,10 @@ By default, keypad controls are dynamically mapped to gamepads per game. The cor
 | `FREEWAY` | `A2` | `A8` | `B4` | `B6` | — | — | `A3` | `CLEAR` | `1P` | BIOS Freeway |
 | `BOWLING` | `A2` | `A8` | — | — | `A5` | — | `A4` | `CLEAR` | `1P` | BIOS Bowling |
 | `BASEBALL` | `B2` | `B8` | — | — | `A5` / `B5` | — | `A0` | `CLEAR` | `2P` | TV Arcade IV – Baseball |
-| `HOMEBREW` | `2` | `8` | `4` | `6` | `B0` | `1` / `3` / `7` / `9` diagonals | `A0` / `A5` / `A6` | `CLEAR` | `1P` | Asteroids, Berzerk, Invaders, Kaboom, Pacman, Scramble |
+| `HOMEBREW` | `2` | `8` | `4` | `6` | `B0` | — | `A0` / `A5` / `A6` | `CLEAR` | `1P` | Asteroids, Berzerk, Invaders, Kaboom, Pacman, Scramble |
 | `HB2P` | `2` | `8` | `4` | `6` | `0` | — | `A1` | `CLEAR` | `2P` | Hockey, Combat |
 | `GUNFIGHTER` | `B2` | `B8` | `B4` | `B6` | `B5` | `B0` | `A1` | `CLEAR` | `1P` | TV Arcade Series – Gunfighter / Moonship Battle |
-| `8WAY` | `2` | `8` | `4` | `6` | `5` | `0`; diagonals `1` / `3` / `7` / `9` | `A1` | `CLEAR` | `1P` | Flappy Pixel |
+| `8WAY` | `2` | `8` | `4` | `6` | `5` | `0` | `A1` | `CLEAR` | `1P` | Flappy Pixel |
 | `DOODLE` | `B2` | `B8` | `B4` | `B6` | `B5` | `B0` | `A1` / `A2` | `CLEAR` | `1P` | BIOS Doodle / Patterns |
 | `PADDLE` | `B2` | `B8` | `B4` | `B6` | `B5` | — | `A1` | `CLEAR` | `1P` | TV Arcade III – Tennis / Squash |
 | `CLEAR_ONLY` | — | — | — | — | — | — | — | `CLEAR` | n/a | Numerical-input games; BIOS Addition |
@@ -316,7 +303,8 @@ This core would not be correct without other people's work. In particular:
 - **kanpapa** — `cosmac_mbc`, a COSMAC MicroBoard with Pixie video.
 - The **classicgaming Studio 2 technical pages** (via the Internet Archive), the
   source of everything in `docs/`.
-- **ubersaurus** — invaluable insights, documentation, rare archives and more.
+- **Kevin Bunch** — invaluable insights, documentation, rare archives, 
+  authorship attributions.
 
 ## Licence
 
