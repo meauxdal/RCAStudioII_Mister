@@ -44,12 +44,23 @@ module rcastudioii
 	input        [9:0] osk_b,          // and for keypad B
 	input  reg         ce_pix,
 	input              clear_key,      // CLEAR button input from top-level; keep video alive during CLEAR
+	//  Which machine, from the OSD:
+	//    0  Studio II          CDP1861, NTSC, monochrome
+	//    1  Studio III PAL     CDP1864 -- video, colour and tone in one part
+	//    2  Studio III NTSC    CDP1861 + CDP1862 colour + CDP1863 tone
+	//  The two Studio IIIs are different chipsets, not one part with two sets of
+	//  timings -- see docs/succession-plan.md §9.
+	input        [1:0] machine,
 
 	output reg         HBlank,
 	output reg         HSync,
 	output reg         VBlank,
 	output reg         VSync,
 	output reg         video_de,
+	// DE for the bitmap alone, as distinct from video_de (the whole raster). The
+	// simulation harness captures this so its frames stay 64x128 / 64x192 and the
+	// recorded scores keep their meaning. Unused by the FPGA top level.
+	output reg         bitmap_de,
 	// {R,G,B}, one bit per channel -- this mirrors the hardware rather than
 	// inventing a format. The CDP1864 in the successor machines has exactly one
 	// RDATA, GDATA and BDATA pin, fed from colour RAM, which is what gives it
@@ -63,8 +74,34 @@ module rcastudioii
 	// That needs a fourth bit, and it belongs with the 1864 itself rather than
 	// being guessed at here.
 	output       [2:0] video,
+	// Visicom only: which of its four colours this pixel is. The palette is
+	// four fixed RGB values that a 1-bit-per-channel bus cannot carry, so the
+	// top level applies it; `video` above still gets a 3-bit approximation for
+	// anything that only has three wires (the simulation harness).
+	output       [1:0] vis_index,
+	// BCKGND from the CDP1864: this pixel's colour came from the background
+	// select rather than a lit bit, so it should be shown at lower luminance.
+	// Always low on the monochrome Studio II, which has no background colour.
+	output reg         video_bg,
 	output             audio
 );
+
+//  Derived from `machine`. Most of the machine-dependent behaviour keys off
+//  "is this a Studio III" (the memory map, colour RAM, the tone generator)
+//  rather than off which video part it has, which is only the PAL one.
+localparam [1:0] MACHINE_STUDIO2   = 2'd0;
+localparam [1:0] MACHINE_S3_PAL    = 2'd1;
+localparam [1:0] MACHINE_S3_NTSC   = 2'd2;
+localparam [1:0] MACHINE_VISICOM   = 2'd3;
+
+// The Visicom is NOT a Studio III despite Robson's visicom.txt calling it a
+// "clone of the Studio 3". It has a plain CDP1861 and no colour RAM at all: its
+// colour comes from a second bit plane in main RAM, so none of the Studio III
+// memory map, colour RAM or tone generator applies to it. Keeping is_studio3 as
+// "not a Studio II" would have handed it all three.
+wire is_studio3      = (machine == MACHINE_S3_PAL) || (machine == MACHINE_S3_NTSC);
+wire machine_mpt02   = (machine == MACHINE_S3_PAL);   // has the CDP1864
+wire machine_visicom = (machine == MACHINE_VISICOM);
 
 ////////////////// VIDEO //////////////////////////////////////////////////////////////////
 
@@ -77,7 +114,6 @@ wire [1:0]  SC;
 wire        INT;
 wire        DMAO;
 wire        EFx;
-wire        Locked;
 
 
 pixie_video pixie_video (
@@ -93,33 +129,164 @@ pixie_video pixie_video (
     // were tied on/off, so the display could never be disabled and the 1861 started generating
     // interrupts from reset instead of from the moment the BIOS enabled it. The earlier commented
     // version keyed off io_n[0] alone, which cannot tell INP 1 from OUT 1.
-    .disp_on    (io_inp && (io_n == 3'd1)),  // I
-    .disp_off   ((io_out && (io_n == 3'd1)) || clear_key),  // I: also blank display while CLEAR is asserted
+    // The Visicom enables the display with OUT 1 rather than INP 1, and has no
+    // disable port at all -- Emma 02's config carries a single <out type="on">1
+    // where the Studio II carries <out>1 and <in>1, which its parser turns into
+    // PIXIE_OUT_OUT with only the enable populated.
+    .disp_on    (machine_visicom ? (io_out && (io_n == 3'd1))
+                                 : (io_inp && (io_n == 3'd1))),  // I
+    .disp_off   ((!machine_visicom && io_out && (io_n == 3'd1)) || clear_key),  // I: also blank display while CLEAR is asserted
 
 
     .data_in    (ram_q),      // I [7:0]  byte the CPU delivers during a DMA-OUT cycle
+    .vis_mode   (machine_visicom),  // I
+    .data_in2   (pl1_q),      // I [7:0]  Visicom plane 1: the byte $200 higher
+    .colour_in  (colour_dot), // I  CDP1862 colour for that byte (NTSC Studio III)
+    .con        (colour_on),  // I
+    .bg_step    (io_out && (io_n == 3'd1) && !machine_visicom),  // I  OUT 1 steps the background
 
-    .DMAO       (DMAO),       // O
-    .INT        (INT),        // O
-    .EFx        (EFx),        // O
+    .DMAO       (DMAO_61),    // O
+    .INT        (INT_61),     // O
+    .EFx        (EFx_61),     // O
 
     // back end, video clock domain
     .video_clk  (clk_sys),    // I
     .csync      (),           // O
     .video      (video_dot),  // O  one bit: the 1861 is a monochrome part
+    .colour_out    (col61_dot),
+    .vis_index     (vis_index),
+    .bg_active     (col61_bg),
+    .bg_colour_out (col61_bgc),
 
-    .VSync      (VSync),      // O
-    .HSync      (HSync),      // O
-    .VBlank     (VBlank),     // O
-    .HBlank     (HBlank),     // O
-    .video_de   (video_de)    // O
+    .VSync      (VSync_61),   // O
+    .HSync      (HSync_61),   // O
+    .VBlank     (VBlank_61),  // O
+    .HBlank     (HBlank_61),  // O
+    .video_de   (de_61),      // O
+    .bitmap_de  (bde_61)      // O
 );
 
-// White on black: the Studio II's 1861 has no colour, so every channel follows
-// the single dot bit. A machine with a CDP1864 will drive these three from
-// colour RAM instead (see docs/succession-plan.md §6).
+// ---- CDP1864, the colour machines' video ---------------------------------
+// Both parts are instantiated and the active one selected, rather than making
+// one module's geometry runtime-switchable: the 1861's timing is delicately
+// tuned and documented as such, and both parts are tiny. See the header of
+// rtl/pixie/cdp1864.v.
+//
+// Note the different I/O decode. On the 1864 the display is turned off by INP 4,
+// not OUT 1 -- OUT 1 is taken over by the background colour step. The datasheet
+// gives the opcodes: 61 or 69 enable interrupt and DMA, 6C disables them.
+wire       DMAO_64, INT_64, EFx_64;
+wire       VSync_64, HSync_64, VBlank_64, HBlank_64, de_64, bde_64, bg_64;
+wire [2:0] video_64;
+
+cdp1864 cdp1864
+(
+    .clk        (clk_sys),
+    .ce_pix     (ce_pix),
+    .cpu_ce     (cpu_ce),
+    .reset      (reset & ~clear_key),
+
+    .SC         (SC),
+    .data_in    (ram_q),
+    .colour_in  (colour_dot),
+    .con        (colour_on),
+    .disp_on    (io_inp && (io_n == 3'd1)),
+    .disp_off   ((io_inp && (io_n == 3'd4)) || clear_key),
+    .bg_step    (io_out && (io_n == 3'd1)),
+
+    .DMAO       (DMAO_64),
+    .INT        (INT_64),
+    .EFx        (EFx_64),
+
+    .csync      (),
+    .video      (video_64),
+    .bckgnd     (bg_64),
+    .VSync      (VSync_64),
+    .HSync      (HSync_64),
+    .VBlank     (VBlank_64),
+    .HBlank     (HBlank_64),
+    .video_de   (de_64),
+    .bitmap_de  (bde_64)
+);
+
+// ---- tone generator -------------------------------------------------------
+// The CDP1864 integrates this; the NTSC Studio III has it as a separate CDP1863
+// beside its 1861 and 1862. Same latch on OUT 4 and the same gate on Q either
+// way, differing only by one division stage -- so one instance serves both, with
+// div4 picking the chain. Straight from the datasheet's control-line truth table
+// and Weisbecker's Studio III notes ("64 instruction sets sound frequency
+// (inverse)", "Q gates sound output").
+wire aud_tone;
+cdp1863 cdp1863
+(
+    .clk     (clk_sys),
+    .cpu_ce  (cpu_ce),
+    .reset   (reset & ~clear_key),
+    // The 1864's integrated generator has an extra divide-by-4 that the
+    // standalone 1863 does not, so the same latch sounds four times higher on
+    // the NTSC machine. MAME: cdp1864 f = clk/8/4/(latch+1)/2 against cdp1863
+    // f = clk/8/(latch+1)/2 from its clock2 input, which is where TPB goes.
+    .div4    (machine == MACHINE_S3_PAL),
+    .tone_we (io_out && (io_n == 3'd4)),
+    .tone_d  (cpu_dout),
+    .aoe     (Q),
+    .aud     (aud_tone)
+);
+
+// ---- select ---------------------------------------------------------------
+// The Studio II's 1861 has no colour, so every channel follows its single dot
+// bit -- white on black, unchanged from before the video path widened.
 wire       video_dot;
-assign     video = {3{video_dot}};
+wire       DMAO_61, INT_61, EFx_61;
+wire       VSync_61, HSync_61, VBlank_61, HBlank_61, de_61, bde_61;
+wire [2:0] col61_dot, col61_bgc;
+wire       col61_bg;
+wire [2:0] video_61;
+wire       bg_61;
+
+// The CDP1862 beside the 1861, fitted only on the NTSC Studio III. On a Studio II
+// `enable` is low and it passes the luminance bit straight through as white.
+cdp1862 cdp1862
+(
+    .enable     (machine == MACHINE_S3_NTSC),
+    .luminance  (video_dot),
+    .in_raster  (de_61),
+    .dot_colour (col61_dot),
+    .bg_active  (col61_bg),
+    .bg_colour  (col61_bgc),
+    .video      (video_61),
+    .bckgnd     (bg_61)
+);
+
+// The Visicom's four colours do not fit a 1-bit-per-channel bus, so the exact
+// palette is applied at the top level (RCAStudioII.sv) from vis_index. What
+// goes out here is the nearest 3-bit approximation, which is what the Verilator
+// harness captures -- the four colours stay distinguishable in a PNG or an
+// ASCII dump, which is all that side needs.
+reg  [2:0] vis_approx;
+always @(*) begin
+	case (vis_index)
+		2'd0:    vis_approx = 3'b010;   // background: dark green
+		2'd1:    vis_approx = 3'b011;   // cyan
+		2'd2:    vis_approx = 3'b110;   // yellow
+		default: vis_approx = 3'b100;   // red
+	endcase
+end
+
+assign video    = machine_visicom ? vis_approx : (machine_mpt02 ? video_64 : video_61);
+assign DMAO     = machine_mpt02 ? DMAO_64  : DMAO_61;
+assign INT      = machine_mpt02 ? INT_64   : INT_61;
+assign EFx      = machine_mpt02 ? EFx_64   : EFx_61;
+
+always @(*) begin
+	VSync    = machine_mpt02 ? VSync_64  : VSync_61;
+	HSync    = machine_mpt02 ? HSync_64  : HSync_61;
+	VBlank   = machine_mpt02 ? VBlank_64 : VBlank_61;
+	HBlank   = machine_mpt02 ? HBlank_64 : HBlank_61;
+	video_de = machine_mpt02 ? de_64     : de_61;
+	bitmap_de = machine_mpt02 ? bde_64   : bde_61;
+	video_bg  = machine_mpt02 ? bg_64    : bg_61;
+end
 
 ////////////////// KEYPAD //////////////////////////////////////////////////////////////////
 
@@ -170,20 +337,15 @@ reg  [9:0] playerB = 10'h0;
 ////////////////// JOYSTICK -> KEYPAD ///////////////////////////////////////
 //
 // The Studio II has no joystick: every game is played on the 10-key pads, and
-// each one picks its own keys. So a gamepad can only work if the mapping follows
-// the cartridge. A CRC16 of the image is taken while it downloads and looked up
+// keys vary by game. A CRC16 of the image is taken while it downloads and looked up
 // in a table below; the result selects one of a few profiles.
 //
-// Key numbers come from the RCA manuals (see Readme "How to play"), not guesses.
 // MiSTer joystick bits, per the CONF_STR "J1,..." list in RCAStudioII.sv:
 //   [0]=right [1]=left [2]=down [3]=up   [4]=Fire   [5]=Extra   [6]=Start
 //   [7]=Select(CLEAR, folded into reset by the top level)
 //   [17:8]=A0..A9   [27:18]=B0..B9.
 // Fire/Extra mirror the MPT-02 joystick (the Soundic/Hanimex Studio III
 // machines' swappable keypad controller): fire on 5, a second button on 0.
-// Extra only presses 0 in the profiles where 0 is documented and safe --
-// CROSS, the MPT-02's own layout -- never in HOMEBREW, where A0 restarts
-// Invaders.
 // A0..B9 are direct per-key bindings with no default mapping: they are inert
 // until the user binds them in Define Buttons, and then they always work, on
 // top of whatever profile is active.
@@ -191,8 +353,7 @@ reg  [9:0] playerB = 10'h0;
 // The profile is 4 bits internally; the OSD override (joy_override) is 4, so
 // the menu can force any of the 16 encoded profiles, including Gunfighter.
 // Keep the numeric values aligned with the OSD list so a user selection selects
-// the correct profile. PADDLE is distinct from CROSS, which remains the default
-// for the retail Tennis/Squash cartridge.
+// the correct profile.
 localparam [3:0] MAP_NONE       = 4'd0;   // no controller mapping; keep keypad/OSK input only
 localparam [3:0] MAP_CROSS      = 4'd1;   // 2/8/4/6 + 5 fire, both pads
 localparam [3:0] MAP_SPACEWAR   = 4'd2;   // fire A2, steer B4/B6
@@ -203,14 +364,15 @@ localparam [3:0] MAP_HOMEBREW   = 4'd6;   // Paul Robson's 1P games: 8-way on pa
                                           // (diagonals are keys 1/3/7/9), fire B0
 localparam [3:0] MAP_GUNFIGHTER = 4'd7;   // vertical cross: 2/8 + fire 5, one-player
 localparam [3:0] MAP_8WAY       = 4'd8;   // CROSS plus diagonals: 1/3/7/9, fire 5 + extra 0
-localparam [3:0] MAP_DOODLES    = 4'd9;   // Doodles/Patterns: B-side 8-way, fire 5, extra 0
+localparam [3:0] MAP_DOODLE     = 4'd9;   // Doodle/Patterns: B-side 8-way, fire 5, extra 0
 localparam [3:0] MAP_HB2P       = 4'd10;  // 2P homebrew (Hockey, Combat): cross plus
                                           // fire-on-0, each player's own pad. Normally
                                           // chosen by CRC, but also exposed in the OSD
                                           // list as "2P Homebrew" for manual override.
 localparam [3:0] MAP_CLEAR_ONLY = 4'd11;  // explicit no-controller mapping: only Clear/Select
                                           // from the pad; numstick/keyboard still work.
-localparam [3:0] MAP_PADDLE     = 4'd12;  // homebrew tennis.st2: single-player, keypad B
+localparam [3:0] MAP_PADDLE     = 4'd12;  // TODO: fix 2-player to work when selecting 
+										  // that mode. Single-player, keypad B
                                           // only. Up/down map to 2/8; left/fire/right map
                                           // to the one-time racket-size choices B4/B5/B6.
 
@@ -559,9 +721,14 @@ always @(posedge clk_sys) begin
 			// Fallback
 			// ----------------------------------------------------------------
 
+			// Every Visicom cartridge dumped so far starts on 0, not 1 -- Emma
+			// 02's FaqVisicomCartridges says "to start press 0" (or space, which
+			// is its keypad-A 0) for all of them, and the built-in games use
+			// 1/2/3/4/7 instead. There is no CRC entry for any of them yet, so
+			// the machine decides rather than the table.
 			default: begin
 				map_profile <= MAP_8WAY;
-				start_key   <= 4'd1;
+				start_key   <= machine_visicom ? 4'd0 : 4'd1;
 			end
 
 		endcase
@@ -570,7 +737,7 @@ end
 
 // ---- built-in games -------------------------------------------------------
 // With no cartridge there is nothing to CRC, so the five BIOS games are told
-// apart by the key that starts them (service manual pp.7-8): A1 Doodles,
+// apart by the key that starts them (service manual pp.7-8): A1 Doodle,
 // A2 Patterns, A3 Bowling, A4 Freeway, A5 Addition. Only the *first* such press
 // after reset counts -- those keys are reused during play (A5 rolls the ball in
 // Bowling, for instance). 
@@ -591,8 +758,8 @@ always @(posedge clk_sys) begin
 		builtin_profile <= MAP_NONE;
 	end
 	else if (no_cart && !builtin_sel) begin
-		if      (builtin_padA[1] || (builtin_start_press && (active_start_key == 4'd1))) begin builtin_profile <= MAP_DOODLES; builtin_sel <= 1'b1; end  // Doodles: B-side 8-way
-		else if (builtin_padA[2] || (builtin_start_press && (active_start_key == 4'd2))) begin builtin_profile <= MAP_DOODLES; builtin_sel <= 1'b1; end  // Patterns: B-side 8-way
+		if      (builtin_padA[1] || (builtin_start_press && (active_start_key == 4'd1))) begin builtin_profile <= MAP_DOODLE; builtin_sel <= 1'b1; end  // Doodle: B-side 8-way
+		else if (builtin_padA[2] || (builtin_start_press && (active_start_key == 4'd2))) begin builtin_profile <= MAP_DOODLE; builtin_sel <= 1'b1; end  // Patterns: B-side 8-way
 		// A3 = BOWLING; A4 = FREEWAY. If the service manual claims otherwise, it's wrong.
 		else if (builtin_padA[3]) begin builtin_profile <= MAP_BOWLING; builtin_sel <= 1'b1; end  // Bowling
 		else if (builtin_padA[4]) begin builtin_profile <= MAP_FREEWAY; builtin_sel <= 1'b1; end  // Freeway
@@ -682,7 +849,7 @@ function automatic [9:0] map_padA(input [3:0] prof, input [31:0] j);
 			if (j[4]) k[5] = 1'b1;
 			if (j[5]) k[0] = 1'b1;
 		end
-		MAP_DOODLES: begin                   // Doodles/Patterns: B-side 8-way, single-player
+		MAP_DOODLE: begin                   // Doodle/Patterns: B-side 8-way, single-player
 			case (j[3:0])
 			4'b1010: k[1] = 1'b1;            // up+left
 			4'b1001: k[3] = 1'b1;            // up+right
@@ -760,7 +927,7 @@ function automatic [9:0] map_padB(input [3:0] prof, input [31:0] j);
 			if (j[4]) k[5] = 1'b1;
 			if (j[5]) k[0] = 1'b1;
 		end
-		MAP_DOODLES: begin                   // Doodles/Patterns: B-side 8-way, single-player
+		MAP_DOODLE: begin                   // Doodle/Patterns: B-side 8-way, single-player
 			case (j[3:0])
 			4'b1010: k[1] = 1'b1;            // up+left
 			4'b1001: k[3] = 1'b1;            // up+right
@@ -785,10 +952,13 @@ function automatic [9:0] map_padB(input [3:0] prof, input [31:0] j);
 	end
 endfunction
 
+// TODO: Make MAP_PADDLE 2-player-compatible: the right-hand stick should drive the 
+// B-side, and the left-hand stick should drive the A-side. The current implementation 
+// is single-player only. 
 wire profile_1p = (profile == MAP_SPACEWAR) || (profile == MAP_FREEWAY) ||
                   (profile == MAP_BOWLING)  || (profile == MAP_NONE) ||
                   (profile == MAP_HOMEBREW) || (profile == MAP_GUNFIGHTER) ||
-                  (profile == MAP_8WAY)     || (profile == MAP_DOODLES) ||
+                  (profile == MAP_8WAY)     || (profile == MAP_DOODLE) ||
                   (profile == MAP_CLEAR_ONLY) || (profile == MAP_PADDLE);
 wire one_player = (players == 2'd1) || ((players == 2'd0) && profile_1p);
 
@@ -804,24 +974,22 @@ always @* begin
 	end
 end
 wire       start_press = joystick_0[6] | joystick_1[6];
-wire [3:0] active_start_key = ((profile == MAP_GUNFIGHTER) || (profile == MAP_DOODLES) || (profile == MAP_8WAY)) ? 4'd1 : start_key;
+wire [3:0] active_start_key = ((profile == MAP_GUNFIGHTER) || (profile == MAP_DOODLE) || (profile == MAP_8WAY)) ? 4'd1 : start_key;
 wire [9:0] start_keys       = ((profile != MAP_CLEAR_ONLY) && start_press) ? (10'd1 << active_start_key) : 10'd0;
 
 // Gunfighter is the special case: in Auto/1P it is B-only (2/4/6/8 + 5 + 0 on
 // the right-hand pad), while in 2P it splits exactly like CROSS across both
-// pads. DOODLES and PADDLE are permanently B-only one-player profiles, so
-// gamepad 0 drives them regardless of Players. 8WAY follows the normal CROSS
-// path (A-side in 1P). The explicit Clear-only profile stays quiet unless the
-// user binds a direct A/B key manually.
+// pads. 8WAY follows the normal CROSS path (A-side in 1P). The explicit Clear-only profile 
+// stays quiet unless the user binds a direct A/B key manually.
 wire [9:0] joyA = ((profile == MAP_NONE) ? 10'd0
                 : ((profile == MAP_GUNFIGHTER) && one_player) ? 10'd0
-                : ((profile == MAP_DOODLES) ? 10'd0
+                : ((profile == MAP_DOODLE) ? 10'd0
                                           : ((profile == MAP_GUNFIGHTER) ? map_padA(MAP_CROSS, joystick_0)
                                                                         : map_padA(profile, joystick_0))));
 
 wire [9:0] joyB = ((profile == MAP_NONE) ? 10'd0
                 : ((profile == MAP_GUNFIGHTER) && one_player) ? map_padB(MAP_CROSS, joystick_0)
-                : ((profile == MAP_DOODLES) ? map_padB(MAP_DOODLES, joystick_0)
+                : ((profile == MAP_DOODLE) ? map_padB(MAP_DOODLE, joystick_0)
                                           : ((profile == MAP_GUNFIGHTER) ? map_padB(MAP_CROSS, joystick_1)
                                                                         : (one_player ? map_padB(profile, joystick_0)
                                                                                        : map_padB(profile, joystick_1)))));
@@ -839,8 +1007,7 @@ wire  [9:0] padB = playerB | joyB_active | osk_b;
 assign EF = {key_valid & padB[keylatch], key_valid & padA[keylatch], 1'b1, EFx};
 
 // The Studio II has no input port that returns data -- the keypads are read through EF3/EF4,
-// and INP 1 only toggles the display, discarding the byte. Tie the CPU's input bus off
-// explicitly at 0 (what synthesis was silently defaulting to) rather than leave it undriven.
+// and INP 1 only toggles the display, discarding the byte. 
 wire [7:0] cpu_din = 8'h00;
 reg  [7:0] cpu_dout;
 wire       Q;
@@ -863,9 +1030,20 @@ reg WAIT_N      = 1'b1;   // Clear=1, Wait=1 is Run. Was 0, which only worked be
 // cycles per frame, which is what a real Studio II gets.
 reg  [2:0] cpu_div = 3'd0;
 wire       cpu_ce  = ce_pix & (cpu_div == 3'd7);
+// The divider's reset carries the same CLEAR carve-out as the pixie's, and it
+// must: CLEAR keeps the pixie's counters running (so video sync survives) but
+// used to zero cpu_div, so on release the machine-cycle grid re-locked at an
+// arbitrary pixel phase -- a relationship that is fixed in silicon, where
+// CLEAR resets the 1802 and the 1861 together (RCA block diagram, CLAUDE.md
+// §2.1). Three of the eight release phases left the Visicom blank or its
+// display base rotated (the 13/16-byte rotations seen on hardware,
+// docs/handoff.md 2026-08-19); the Studio II titles merely tolerated the
+// misalignment thanks to the ISR-phase work. Keeping the divider counting
+// through CLEAR keeps cpu_ce locked to the pixie across it; on every other
+// reset both still start together from zero.
 always @(posedge clk_sys) begin
-	if (reset)       cpu_div <= 3'd0;
-	else if (ce_pix) cpu_div <= cpu_div + 3'd1;
+	if (reset & ~clear_key) cpu_div <= 3'd0;
+	else if (ce_pix)        cpu_div <= cpu_div + 3'd1;
 end
 reg dma_in_req  = 1'b0;
 //reg dma_out_req = 1'b0;
@@ -962,20 +1140,101 @@ wire  [7:0]  ram_q;  // data returned to the CPU (and to the 1861 during DMA)
 reg  [7:0]  cart_page = 8'h00;    // indexed by address bits [10:8]: page $08..$0F
 
 wire        bank0    = (ram_a[15:12] == 4'h0);
-wire        rom_sel  = bank0 && !ram_a[11];                        // $0000-$07FF
-wire        cart_sel = bank0 &&  ram_a[11] && cart_page[ram_a[10:8]];
-wire        ram_sel  = !rom_sel && !cart_sel && !ram_a[9];         // the A9 = 0 mirror
-wire        cpu_wr   = ram_wr && ram_sel;                          // RAM is the only writeable thing
+wire        rom_sel  = bank0 && (!ram_a[11] || machine_visicom);   // $0000-$07FF ($0000-$0FFF on the Visicom)
+// The CDP1864 machines put a second ROM region at $0C00-$0FFF -- MAME's
+// mpt02_map has .rom() there as well as at $0000-$07FF, and the Studio III BIOS
+// is a 4K image covering both. On those machines it is ROM whether or not a
+// cartridge paged anything in, so it takes precedence over the RAM mirror that
+// $0C00-$0DFF would otherwise be.
+wire        rom_hi   = is_studio3 && bank0 && (ram_a[11:10] == 2'b11);      // $0C00-$0FFF
+// Colour RAM: 64 cells behind a one-page window at $0B00-$0BFF. Only six address
+// lines are decoded, which is why MAME names the storage ($0B00-$0B3F) and Emma 02
+// the window ($0B00-$0BFF) without disagreeing. See docs/succession-plan.md §6.
+wire        col_sel  = is_studio3 && bank0 && (ram_a[11:8] == 4'hB);
+wire        cart_sel = bank0 &&  ram_a[11] && cart_page[ram_a[10:8]] && !rom_hi && !col_sel && !machine_visicom;
+
+// ---- Toshiba Visicom COM-100 ----------------------------------------------
+// A different map from either Studio, and the only one here that puts RAM above
+// $0FFF. From Emma 02's Visicom/standard.xml:
+//
+//   $0000-$07FF  ROM   2K image: BIOS, and the built-in games at $0400-$07FF
+//                      (Emma declares the window as $0000-$03FF and lets the
+//                      cartridge overlay $0400-$07FF, which is the Studio II
+//                      arrangement stated differently)
+//   $0800-$0FFF  ROM   further cartridge space
+//   $1000-$11FF  RAM   512 bytes: scratch at $1000-$10FF, bit plane 0 at $1100
+//   $1300-$13FF  RAM   256 bytes: bit plane 1
+//   $1200-$12FF        nothing
+//
+// Both RAM windows repeat every $400 all the way to $FFFF -- Emma spells the
+// mirrors out one by one in <map>, which is the same statement as decoding
+// A9-A0 within each 1K page and ignoring everything above.
+wire        vis_ram  = machine_visicom && !bank0 && !ram_a[9];            // 512B, plane 0 in its top half
+wire        vis_pl1  = machine_visicom && !bank0 && (ram_a[9:8] == 2'b11);// 256B, plane 1
+
+wire        ram_sel  = machine_visicom
+                     ? (vis_ram || vis_pl1)
+                     : (!rom_sel && !rom_hi && !col_sel && !cart_sel && !ram_a[9]);
+
+// Plane 1 is its own 256-byte array rather than a second window into the main
+// RAM, and it is addressed by A7-A0 in both of its roles: the video reads it
+// during a DMA cycle, when the address bus holds R(0) = $11xx, and the CPU
+// reads or writes it at $13xx. Same low byte either way, so one single-port
+// array serves both and there is never a conflict -- the CPU is not driving the
+// bus during a DMA cycle.
+//
+// This is deliberately NOT port B of the main RAM, which is where it started.
+// That array already had a port-B writer (the CLEAR wipe) and so was already
+// uninferrable; adding a port-B read doubled it to 1K and doubled the logic it
+// was costing. Keeping plane 1 separate keeps both arrays in block RAM, and is
+// closer to the machine anyway -- it has separate chips.
+wire        cpu_wr   = ram_wr && ram_sel && !vis_pl1;             // RAM is the only writeable thing
+wire        pl1_wr   = ram_wr && vis_pl1;                        // ...and the Visicom's second plane
+wire        col_wr   = ram_wr && col_sel;
+
+// ---- CDP1864 colour RAM ---------------------------------------------------
+// 64 x 3 bits, so a plain register array rather than block RAM. The cell for a
+// display byte is {off[7:5], off[2:0]}: the low three bits are the column (8
+// bytes across a 64-pixel row) and off[7:5] the row group, so one cell covers 8
+// pixels across by 4 logical rows down. Indexing is MAME's, from
+// mpt02_state::dma_w(), whose offset is the DMA address (cosmac_device passes
+// R[0]). Reads are combinational and off the *current* address, because the
+// 1864 latches colour "concurrent with the latching of the luminance
+// information" -- the byte and its colour arrive together.
+reg  [2:0]  colour_ram [0:63];
+// CON, "Color On". The datasheet has this pin "connected to the gated MWR signal
+// of the color memory", so colour switches on with the first write to colour RAM
+// and the part is monochrome until then. Without it, every game that never
+// writes colour RAM came out on a blue field instead of black -- which is how
+// this was caught, against the reference emulator's Conic sweep. MAME fakes it
+// with con_w(0) on every DMA and flags that as a hack.
+reg         colour_on;
+always @(posedge clk_sys) begin
+	if (reset)       colour_on <= 1'b0;
+	else if (col_wr) colour_on <= 1'b1;
+end
+always @(posedge clk_sys) if (col_wr) colour_ram[ram_a[5:0]] <= ram_d[2:0];
+wire [5:0]  col_index = {ram_a[7:5], ram_a[2:0]};
+wire [2:0]  colour_cell = colour_ram[col_index];
+// Colour RAM bit order is the 1864's pin order, which is NOT {R,G,B}: MAME's
+// mpt02_state has rdata_r() = BIT(m_color,0), bdata_r() = BIT(m_color,1) and
+// gdata_r() = BIT(m_color,2), i.e. bit0 red, bit1 blue, bit2 green. Permute into
+// the {R,G,B} the video bus carries. Getting this wrong renders the right picture
+// in the wrong colours -- the pinball table came out magenta-bordered instead of
+// yellow, which is how the bug was spotted.
+wire [2:0]  colour_dot = {colour_cell[0], colour_cell[2], colour_cell[1]};
 
 // Both arrays have one cycle of latency, so the read mux select has to be
 // delayed with the data. The CPU holds an address for a whole machine cycle
 // (32 clk_sys), so a registered select is settled long before it is sampled.
 wire [7:0]  rom_q;
 wire [7:0]  sram_q;
-reg         rom_sel_q, ram_sel_q;
+wire [7:0]  pl1_q;
+reg         rom_sel_q, ram_sel_q, pl1_sel_q;
 always @(posedge clk_sys) begin
-	rom_sel_q <= rom_sel | cart_sel;
+	rom_sel_q <= rom_sel | cart_sel | rom_hi;
 	ram_sel_q <= ram_sel;
+	pl1_sel_q <= vis_pl1;
 end
 // Open bus reads back as $FF, matching MAME's unmap_value_high and the likely
 // floating-bus behaviour of the real machine (nothing drives the lines, and
@@ -987,7 +1246,9 @@ end
 // render as the full-screen white flash MAME shows. Nothing in the §9 corpus
 // reads undecoded space (tools/memdecode-test.sh covers it instead), so the
 // frame comparison is unaffected.
-assign ram_q = ram_sel_q ? sram_q : (rom_sel_q ? rom_q : 8'hFF);
+assign ram_q = pl1_sel_q ? pl1_q
+             : ram_sel_q ? sram_q
+             : rom_sel_q ? rom_q : 8'hFF;
 
 
 ////////////////// SOUND ////////////////////////////////////////////////////
@@ -1044,7 +1305,13 @@ always @(posedge clk_sys) begin
 	end
 end
 
-assign audio = snd_out;
+// The Studio II's beeper is the discrete NE555 modelled above; the CDP1864
+// machines have the tone generator inside the video part instead, so the 555
+// goes away with the machine rather than being gated off. Weisbecker's Studio
+// III sketch (IMG_1536.JPG) does keep a 555 alongside a "16 pin new chip for
+// programmable tones", but that is the III A prototype -- the production
+// Studio III and MPT-02 use the CDP1864, which is what this models.
+assign audio = is_studio3 ? aud_tone : snd_out;
 
 ////////////////// CARTRIDGE LOADER /////////////////////////////////////////
 //
@@ -1094,8 +1361,17 @@ wire  [7:0] st2_pg    = st2_page[st2_blk];
 // system ROM ($00-$03), not RAM ($08-$09), and below $10. $0C/$0D ARE legal --
 // race.st2 pages ROM over the default RAM mirror there, which is why the memory
 // map calls $C00-$DFF "RAM/ROM". $00 is also the format's "unused block" marker.
+// Page $0B is the CDP1864's colour RAM, not cartridge space, so a cartridge must
+// not be able to page ROM over it on that machine. (On the Studio II $0B is an
+// ordinary cartridge window and stays loadable, which is why this is gated.)
+// On the Visicom RAM is not in this bank at all -- it sits at $1000 and above --
+// so $08 and $09 are ordinary cartridge space there. Every one of Emma 02's six
+// Visicom cartridges pages exactly $08-$0F, which the Studio II rule rejects
+// outright: without this the whole image is dropped and the machine boots to its
+// built-in games as though no cartridge were inserted.
 wire        st2_pg_ok = (st2_pg[7:4] == 4'h0) && (st2_pg[3:0] > 4'h3)
-                        && (st2_pg[3:0] != 4'h8) && (st2_pg[3:0] != 4'h9);
+                        && (machine_visicom || ((st2_pg[3:0] != 4'h8) && (st2_pg[3:0] != 4'h9)))
+                        && !(is_studio3 && (st2_pg[3:0] == 4'hB));
 
 wire        st2_data  = ioctl_addr >= 16'd256;          // past the header
 wire [11:0] cart_a    = st2_mode ? {st2_pg[3:0], ioctl_addr[7:0]}
@@ -1134,57 +1410,77 @@ dpram #(8, 12) dpram
 	.q_b()
 );
 
-// The 512 bytes of RAM: $0800-$08FF program/system, $0900-$09FF display.
+// The RAM: 512 bytes ($0800-$08FF program/system, $0900-$09FF display on the
+// Studio II and III; $1000-$11FF on the Visicom, whose bit plane 0 is its top
+// half). The Visicom's plane 1 is the separate 256-byte array below.
 // Selected by A9 = 0, so the address inside it is just A8-A0.
 // Add a port-B writer used to clear VRAM on CLEAR without resetting the Pixie
 reg [8:0] clear_addr_b = 9'd0;
 reg       clear_active = 1'b0;
-reg       ram_cs_b_sig = 1'b0;
-reg       wren_b_sig = 1'b0;
-reg [8:0] address_b_sig = 9'd0;
-reg [7:0] data_b_sig = 8'd0;
 
+// The wipe drives port A, not port B. Port B writing is what stopped this array
+// inferring as block RAM: two active write ports mean mixed-port read-during-
+// write, which an M10K cannot honour, and Quartus reported
+//
+//   Info (276009): RAM logic "...|dpram:sram|mem" is uninferred due to
+//                  unsupported read-during-write behavior
+//
+// and built all 512 bytes out of logic instead -- 6,119 ALUTs and 4,104
+// registers, most of the whole core. The ROM dpram and the Visicom's sram2 use
+// this same module with port B tied off and both infer cleanly, which is what
+// makes this the fix rather than a ramstyle attribute.
+//
+// Safe on port A because CLEAR is folded into reset, so the CPU is held in reset
+// for the whole wipe and is not driving the bus.
 always @(posedge clk_sys) begin
-    // Default: inactive
-    ram_cs_b_sig <= 1'b0;
-    wren_b_sig  <= 1'b0;
-    address_b_sig <= 9'd0;
-    data_b_sig <= 8'd0;
-
-    // Start a clear sequence when CLEAR is asserted (and not already active)
     if (clear_key && !clear_active) begin
         clear_active <= 1'b1;
         clear_addr_b <= 9'd256; // VRAM starts at offset 256 in the 512-byte RAM
     end
     else if (clear_active) begin
-        // Write zero to current VRAM address
-        ram_cs_b_sig <= 1'b1;
-        wren_b_sig   <= 1'b1;
-        address_b_sig <= clear_addr_b;
-        data_b_sig   <= 8'd0;
-        if (clear_addr_b == 9'd511) begin
-            // Finished clearing VRAM; deassert clear_active on next cycle
-            clear_active <= 1'b0;
-        end
-        else begin
-            clear_addr_b <= clear_addr_b + 1'b1;
-        end
+        if (clear_addr_b == 9'd511) clear_active <= 1'b0;
+        else                        clear_addr_b <= clear_addr_b + 1'b1;
     end
 end
+
+wire [8:0] sram_a_addr = clear_active ? clear_addr_b : ram_a[8:0];
+wire [7:0] sram_a_data = clear_active ? 8'd0         : ram_d;
+wire       sram_a_we   = clear_active ? 1'b1         : cpu_wr;
 
 dpram #(8, 9) sram
 (
 	.clock(clk_sys),
 	.ram_cs(1'b1),
-	.address_a(ram_a[8:0]),
-	.wren_a(cpu_wr),
-	.data_a(ram_d),
+	.address_a(sram_a_addr),
+	.wren_a(sram_a_we),
+	.data_a(sram_a_data),
 	.q_a(sram_q),
 
-	.ram_cs_b(ram_cs_b_sig),
-	.wren_b(wren_b_sig),
-	.address_b(address_b_sig),
-	.data_b(data_b_sig),
+	// Port B is tied off entirely, which is what lets this infer as block RAM.
+	// Do not give it a write or a read without re-checking the inferred-
+	// altsyncram list in output_files/RCAStudioII.map.rpt (CLAUDE.md §8).
+	.ram_cs_b(1'b0),
+	.wren_b(1'b0),
+	.address_b(9'd0),
+	.data_b(),
+	.q_b()
+);
+
+// The Visicom's second bit plane: 256 bytes at $1300-$13FF, read every cycle at
+// A7-A0 so the video has it during DMA and the CPU has it at $13xx.
+dpram #(8, 8) sram2
+(
+	.clock(clk_sys),
+	.ram_cs(1'b1),
+	.address_a(ram_a[7:0]),
+	.wren_a(pl1_wr),
+	.data_a(ram_d),
+	.q_a(pl1_q),
+
+	.ram_cs_b(1'b0),
+	.wren_b(1'b0),
+	.address_b(8'd0),
+	.data_b(),
 	.q_b()
 );
 

@@ -372,3 +372,481 @@ go to `refs/rca-studio2/Documents/`, `docs/rca-technical/` and the datasheets
 before choosing. Every conflict hit so far — open bus `$00` vs `$FF`, the keypad
 strobe, the built-in game order, and this one — was settled by paper, and in two
 cases the paper contradicted what the RTL already did.
+
+---
+
+## 7. MPT-02 bring-up: where it stands (2026-08-17)
+
+The machine runs. `--machine mpt02` in both the RTL sim and `tools/refemu`, and
+`tools/compare-game.sh --machine mpt02 --bios <studio3_pal.bin>` diffs them.
+
+**Use the PAL BIOS.** `studio3_pal.bin` or `victory.rom`. The NTSC images do not
+run under PAL timing — an NTSC colour machine needs its own frame timing, not
+just a different ROM (see `tools/refemu/README.md`).
+
+Score against the reference, 2 frames per cartridge:
+
+| Set | Cartridges | Frames matching |
+|---|---|---|
+| Conic/Studio III cartridges | 14 | **14 / 28** |
+| Sarnoff Collection (`.st2` only) | 4 | 4 / 8 |
+| Conic homebrew (`invsn.st2`) | 1 | 2 / 2 |
+
+The Conic figure was 18/28 when first measured and dropped to 14/28 when the
+reference emulator's cycle model was corrected (task #13). Nothing in the RTL
+changed; the reference moved. That is the same effect the §9 Studio II score saw
+(27 → 26 of 48) but larger, and for the same reason — the display window is
+proportionally bigger on these machines, so giving the CPU its display-window
+cycles shifts more software. **Read these numbers as "how far the two models
+agree", not as an accuracy figure for the RTL.**
+
+Frame rate comes out at **50.373 Hz** from the existing PLL (112 × 312 pixel
+times at clk_sys/4), against the datasheet's 50.08 Hz — 0.6% fast, which is not
+worth a second PLL output.
+
+### `color-demo.st2`: chased and explained — the reference cannot arbitrate this
+
+**Resolved 2026-08-17, and my first hypothesis was wrong.** I guessed the
+reference's render-time colour lookup was at fault. It is not. The real cause is
+the reference's *CPU budget*, and it disqualifies the reference for any
+timing-sensitive comparison on this machine.
+
+What was measured, in order:
+
+1. The colour **RAM contents** differ, not the indexing — so the fault is
+   upstream of display. (Colour index and the R/B/G→RGB permutation are provably
+   identical on both sides.)
+2. The demo **animates** its colour RAM, so phase was the obvious suspect.
+3. But over frames 120–220 the two sides share **zero** colour states: the RTL
+   cycles through 9 distinct ones, the reference only 4, mostly stuck on a single
+   value. Not phase.
+4. Cause: **the reference executes 854 instructions a frame where the RTL
+   executes 1485 — a measured 1.74×.** Its model gives the CPU only
+   `STATE_1 + STATE_2` = `(312-192)*14 + 29` cycles and **nothing at all during
+   the 192 display lines**, where the RTL runs the CPU all frame and loses only
+   the 8 machine cycles a line that DMA actually steals. A demo that paints colour
+   RAM across the frame simply never gets those writes in on the reference.
+
+This is the weakness `CLAUDE.md` §9 already documents for the Studio II
+(~952 against 1321, a 1.39× gap) — but it is **worse here**, because the display
+window is proportionally larger: 192 of 312 lines against 128 of 262.
+
+Consequences, which matter for how the harness gets used:
+
+- The RTL is very likely **right** here and the reference wrong. Not proven —
+  proving it needs Emma 02, which ships this cartridge.
+- The 24/38 score above measures agreement on **static** content and little else.
+  Do not read it as an accuracy figure. Anything that computes during the display
+  window will diverge for reasons that have nothing to do with the RTL.
+- To make the comparison trustworthy for these machines, `tools/refemu` needs a
+  real cycle model: execute during the display window too, minus the DMA steal.
+  That is a change to Robson's timing model rather than a bug fix, so it is filed
+  separately rather than done in passing.
+
+### Also outstanding
+
+- Tone generator (256 tones, 107Hz–13672Hz on `OUT 4`) in neither side.
+- `BCKGND`, which lowers background luminance so one colour can serve as both
+  background and data. Needs a fourth video bit.
+- NTSC colour machines (Studio III NTSC, Conic M-1200) need their own timing.
+- `grand-pack.st2` (CRC `1594`) has no joystick profile entry and falls to the
+  default; the other 13 Conic CRCs were already in the table, paired with their
+  Studio II equivalents.
+
+---
+
+## 8. Why analog video does not sync (2026-08-18)
+
+The Readme lists "Analog video does not work yet" and "Direct video does not
+work yet". The cause is not a sync polarity or a clock rate — **we are not
+emitting a TV raster at all.**
+
+Both video parts here blank everything outside the bitmap, so the active area we
+present is 64×128 (Studio II) or 64×192 (Studio III) inside a 112×262 or 112×312
+frame. Even a display that locks to the sync has no picture to draw.
+
+### What the real part does
+
+It emits a **full-size raster with the small bitmap inside it**, and the border is
+active video painted in the background colour — not blanking. Three sources say
+so independently:
+
+- **Datasheet Fig. 4** (p6) draws it literally: `VERTICAL BLANKING` and
+  `HORIZONTAL BLANKING` at the edges, a large region marked `BACKGROUND`, and the
+  64×192 `DISPLAY AREA` inside that.
+- **Datasheet Fig. 6** (p8): horizontal blanking totals 13.14 µs of a 64 µs line,
+  leaving ~50.9 µs active. Vertical blanking is 24H of 312, with the 4H vertical
+  sync inside it.
+- **MAME's `cdp1861.h`**: `HBLANK_END = 12` against `SCREEN_WIDTH = 112`, so 100
+  of 112 pixel times are active; `SCANLINE_VBLANK_END = 16` of 262, so 246 lines
+  are active. The 64×128 display sits inside that.
+
+And the photographs of real Studio III output confirm it: the picture occupies
+the middle of the screen inside a wide border, and that border is the background
+colour (black in most of those shots, because those programs selected black).
+
+### There is no upscaler — that was the question
+
+Nothing scales anything. The picture fills a TV screen by three plain means:
+
+1. **Vertically**, software shows each logical row over several scanlines by
+   rewinding `R(0)` — 4 lines a row on the NTSC 1861, 6 on the PAL 1864. That is
+   what the ISR in datasheet Fig. 5 is doing with its repeated
+   `DEC R0` / `PLO R0`, and why 32 rows becomes 128 or 192 lines.
+2. **Horizontally**, pixels are simply *wide*: one per CPU clock, 568 ns each, so
+   64 of them span 36.4 µs of a ~51 µs active line.
+3. **The rest of the raster is background colour**, which is what makes the frame
+   full-size.
+
+### Measured gap
+
+| | ours | should be |
+|---|---|---|
+| HSync | 3.98 µs | 4.57 (1864) / 4.7 (NTSC) |
+| front porch | 0.57 µs | ~1.5–3.14 |
+| back porch | **22.72 µs** | ~4.7 |
+| active | 36.36 µs | ~50.9 |
+| active lines | **128 of 262** | ~246 of 262 (NTSC), ~288 of 312 (PAL) |
+
+Three faults at once: the sync pulse is narrow, the porches are so asymmetric the
+picture would sit far right even if it locked, and the active window is a
+fraction of the raster.
+
+### Fixed 2026-08-18
+
+Both parts now emit a real raster: **88×242** on the NTSC 1861 and **88×292** on
+the PAL 1864, measured out of the sim. Line layout, against Fig 6:
+
+| | ours | Fig 6 |
+|---|---|---|
+| front porch `0..8` | 4.54 µs | 3.14 |
+| HSync `8..16` | 4.54 µs | 4.57 |
+| back porch `16..24` | 4.54 µs | 3.43 |
+| active `24..112` | 49.99 µs | 50.86 |
+
+The bitmap stays at `40..104` because the DMA phase pins it — the BIOS ISR counts
+cycles against that burst — so it sits 16 pixels from the left of the active area
+and 8 from the right rather than dead centre. Vertically the 1864 blanks 20 lines
+(Fig 4's `20H`) and the 1861 wraps 20 lines around the end of the frame, keeping
+its VSync at 254 so the sim's frame boundary does not move.
+
+On the 1864 the border is painted in the **background colour**, which is the
+BACKGROUND region of Fig 4 and the reason the picture fills a TV. On the mono
+1861 it is black.
+
+**The harness was protected rather than re-baselined.** The core now exports a
+second `bitmap_de` alongside `video_de`, marking the 64×128 / 64×192 bitmap
+alone, and the Verilator frame grabber captures that. So captured frames keep
+their old size and every recorded score keeps its meaning: Studio II byte-identical
+across all 71 images, §9 score 26/48 unchanged, Conic 14/28 unchanged, memdecode
+8/8, tone test passing.
+
+**This section is the diagnosis and the fix. For the current state, the test
+procedure and what to do when it does not lock, see `docs/analog-video.md`.**
+
+Still open: the picture is not horizontally centred (16 px left border against 8),
+because centring it would mean moving the DMA phase that the ISR depends on. And
+none of this has been seen on real analog hardware yet — it is verified against
+the datasheet's figures and the sim, not a TV.
+
+None of this affects HDMI, where `video_freak` scales whatever it is given — which
+is why the core looks correct on HDMI and produces nothing usable on analog.
+
+---
+
+## 9. The NTSC Studio III is a different chipset (2026-08-18)
+
+`#16` was written as "give the CDP1864 a second, NTSC set of timings". That
+premise is wrong, and Emma 02's machine XML says so outright.
+
+`refs/emma_02/data/Xml/StudioIII/standard-ntsc.xml` against `standard-pal.xml`:
+
+| | PAL Studio III / MPT-02 | **NTSC Studio III** |
+|---|---|---|
+| video | `<video type="1864">` | **`<video type="cdp1861">`** |
+| colour | inside the 1864 | **`<video type="cdp1862">`** |
+| sound | inside the 1864 | **`<sound type="cdp1863">`** |
+| frame | 312 lines, display 76..267 (192) | 262 lines, display 64..191 (128) |
+| interrupt | line 74 | line 62 |
+
+So the PAL machine integrates video, colour and tone into one part, and **the NTSC
+machine is three separate chips**: the CDP1861 we already have, plus a CDP1862
+colour generator and a CDP1863 tone generator. That is why `studio3_ntsc.bin`
+will not run under PAL timing — not a timing tweak, a different video subsystem.
+It is also why MAME cannot help: it has no NTSC Studio III at all.
+
+### The good news: we have already written most of it
+
+MAME's device headers show the 1862 and 1863 are exactly the halves of the 1864
+we implemented:
+
+- `cdp1862.h` has `rdata_cb` / `bdata_cb` / `gdata_cb`, `bkg_w` and `con_w`, and
+  `BKG LUM` / `BKG CHR` pins. Same colour RAM at `$0B00-$0BFF`, same background
+  step on `OUT 1`, same CON, same background-luminance idea as BCKGND.
+- `cdp1863.cpp` takes its latch on `OUT 4` as the 1864 does. Its divider differs:
+  `clock/8/(latch+1)/2` against the 1864's `clock/8/4/(latch+1)/2`, so the same
+  latch gives four times the frequency.
+
+So the work is mostly *re-attaching* logic we have, not writing new logic.
+
+### What it actually takes
+
+1. A third machine value in the OSD row, and the memory decode (`$0C00-$0FFF`
+   ROM, colour RAM at `$0B00`) driven by "is a Studio III" rather than by
+   "is the 1864", which is how it is gated today.
+2. The colour path — colour RAM lookup, border, CON, BCKGND — factored out of
+   `cdp1864.v` so the 1861 can use it too. That is the bulk of it.
+3. The 1863 divider, which is the 1864's with one fewer division stage.
+4. **The risk:** Emma puts the NTSC Studio III display at 64..191 with the
+   interrupt at 62, where our 1861 uses 80..208 and 78 (MAME's numbers, tuned
+   against real software). Same structure, 16 lines apart. Making the 1861's
+   geometry machine-dependent touches the timing that took many iterations to
+   settle — see its `INT_LEAD` / `EFX_LEAD` / `DMA_ADAPT` commentary. Do that
+   part last and behind an A/B against the Studio II corpus.
+
+### Implemented, and the decomposition is confirmed (2026-08-19)
+
+Built, and it boots — which is the proof the documentary evidence could not give.
+`studio3_ntsc.bin` now runs under `--machine studio3ntsc` and renders Conic
+pinball in full colour at 64×128, against the PAL machine's 64×192: blue field,
+yellow border, green and red bumpers, magenta targets, cyan lanes. Before this it
+would not start at all.
+
+How it went together, in the order it was done:
+
+1. **`rtl/pixie/cdp1863.v`** — the tone generator lifted out of `cdp1864.v`,
+   since both machines need it and only one has an 1864 to hold it. A `div4`
+   input picks the chain: the 1864's integrated generator has an extra
+   divide-by-4 that the standalone part does not, so the same latch sounds four
+   times higher on NTSC.
+2. **The machine select widened to two bits** — Studio II, Studio III PAL, Studio
+   III NTSC — with the memory map (`$0C00-$0FFF` ROM, colour RAM at `$0B00`) and
+   the tone now keyed off *"is a Studio III"* rather than *"has an 1864"*, which
+   is how they had been gated. CONF_STR to `v5`.
+3. **The 1861 latches a colour and a CON bit with each DMA byte** and shifts them
+   beside the luminance, exactly as the 1864 does. That has to live where the DMA
+   is. It is inert on a Studio II, which drives `con` low.
+4. **`rtl/pixie/cdp1862.v`** — deliberately thin, because step 3 does the hard
+   part: it only chooses between the dot colour and the background, which is what
+   the real part does with its RDATA/BDATA/GDATA inputs and its BKG pin.
+
+Nothing regressed: Studio II byte-identical across all 71 images, §9 score 26/48,
+Conic PAL 14/28, memdecode 8/8, tone test passing.
+
+**Still to do on this machine.** Emma puts the NTSC Studio III display at 64..191
+with the interrupt at 62, where our 1861 uses 80..208 and 78. It currently runs on
+the Studio II's geometry, which is why it works at all — making that
+machine-dependent touches the `INT_LEAD` / `EFX_LEAD` / `DMA_ADAPT` timing that
+took many iterations to settle, and wants an A/B against the Studio II corpus
+behind it. Conic M-1200, which Emma lists as NTSC, comes along once that is
+settled. And none of the NTSC side is checked against the reference emulator,
+which models only the PAL machine.
+
+---
+
+## 10. Studio IV: out of scope for this core (2026-08-19)
+
+`#9` asked whether the Studio IV is worth attempting. Having read both
+Weisbecker's own I/O spec and Emma 02's machine configs: **not in this core.** It
+shares the 1802 and almost nothing else.
+
+Emma's `data/Xml/StudioIV/*.xml`:
+
+| | Studio II / III | Studio IV |
+|---|---|---|
+| video | `pixie` / `cdp1861` / `1864` | **`st4`**, its own part |
+| colour RAM | 64 cells at `$0B00` | **1 KB**, at `$2800-$2BFF` or `$1000-$13FF` — *configurable* |
+| RAM | 512 bytes | up to **`$97FF`** on the 32 K builds |
+| ports | `OUT 1` background, `OUT 4` tone | `OUT 4,6` colour, `OUT 5` DMA |
+| software | cartridges | BASIC and CHIP-8 **system images** |
+
+The software on disk says the same thing: `am4kbas` (4 K BASIC) in 1978, 2020 and
+32 K variants, `super-chip`, and Studio IV V2/V3 system ROMs. There is not a
+cartridge among them.
+
+So none of what this core is built around applies — not the ST2 loader, the CRC
+profile table, the keypad model, the 512-byte RAM decode, nor the cartridge
+paradigm itself. It is a computer that happens to share a CPU, and it belongs in
+its own core.
+
+**What we do have, for whoever takes it on**, is unusually good: Weisbecker's
+typed "STUDIO IV INSTRUCTIONS" of 20 July 1977 (`docs/rca-technical/Studio II III
+IV/IMG_0353.JPG`, transcribed in `CLAUDE.md` §2.1) gives the whole port map —
+`61` tone, `62` key select, `63` output port, `64` TV control with RGB background,
+spot map and the 192-vs-128 line select, `65` DMA-out, `6B` input port, and "TV
+off after reset". Emma's `<out type="dma">5</out>` agrees with his `65`, so the
+production machine kept at least part of that prototype map. His colour-chip
+sketch (`IMG_1535.JPG`) and the "III A — STUDIO II COMPATIBLE" design
+(`IMG_1536.JPG`) are the surrounding context.
+
+---
+
+## 11. Visicom COM-100: done (2026-08-19)
+
+`#8`, and the last machine on the list. It was deferred once as "a bigger job
+than it looks", on the strength of MAME's `visicom.cpp`: RAM above `$0FFF` where
+our decode stopped, a 2bpp planar path through the 1861's shifter, and a
+four-entry palette of arbitrary RGB values the 3-bit video bus cannot express.
+All three were real; none was as bad as it looked, because Emma 02 states the
+video rule in five lines where MAME states it in bitfields.
+
+### What it actually is
+
+`Cdp1802::visicomDmaOut` (Emma 02, `src/cdp1802.cpp`):
+
+```cpp
+*vram1 = readMem(scratchpadRegister_[0]);
+*vram2 = readMem(scratchpadRegister_[0]+0x200);
+scratchpadRegister_[0]++;
+```
+
+and in `src/pixie.cpp`, per pixel: `if (vram1 & 128) color |= 1; if (vram2 & 128)
+color |= 2;`. So DMA reads two bytes rather than one, 512 apart, and each pixel
+is one of four colours instead of on/off. There is no colour RAM, no CDP1862, no
+`CON`, no background stepping — none of the Studio III colour machinery applies.
+
+Memory, from `data/Xml/Visicom/standard.xml`:
+
+```
+$0000-$07FF  ROM   BIOS, built-in games at $0400-$07FF
+$0800-$0FFF  ROM   cartridge
+$1000-$11FF  RAM   512B: scratch at $1000, bit plane 0 at $1100
+$1300-$13FF  RAM   256B: bit plane 1              ($1100 + $200, as above)
+$1200-$12FF        nothing
+```
+
+Both RAM windows repeat every `$400` to `$FFFF`. Emma spells every mirror out in
+`<map>`; decoding A9-A0 inside each 1K page is the same statement.
+
+I/O differs in one place that matters: `<out type="on">1</out>` where the Studio
+II has `<out>1</out>` and `<in>1</in>`. Emma's parser turns that into
+`PIXIE_OUT_OUT` with only the enable populated, so **`OUT 1` turns the display
+on** and there is no disable port at all.
+
+### How it was built
+
+- `rtl/pixie/cdp1861.v` gained `vis_mode`, `data_in2` and a `vis_index[1:0]`
+  output: a second line buffer and shift register beside the first, clocked
+  together. `video` becomes "either plane set", because colour 0 is a dark green
+  background rather than black.
+- Plane 1 is **its own 256-byte array**, addressed by A7-A0. That works because
+  the low byte is the same in both of its roles: the video reads it during a DMA
+  cycle, when the address bus holds `R(0) = $11xx`, and the CPU reads or writes
+  it at `$13xx`. The CPU is not driving the bus during a DMA cycle, so a single
+  port serves both and both planes arrive in the same cycle with matched latency.
+
+  This started as port B of the main RAM, whose read half was unused, and that
+  was wrong in a way nothing in simulation could show — see "the 8,000 ALMs"
+  below.
+- The palette is applied in `RCAStudioII.sv`, which is the only place wide enough
+  for it. `video[2:0]` still carries a 3-bit approximation so the Verilator
+  harness and anything else with three wires keeps working.
+- `st2_pg_ok` had to learn that `$08` and `$09` are cartridge space here. All six
+  dumped cartridges page exactly `$08-$0F`; under the Studio II rule the entire
+  image was dropped and the machine booted to its built-ins as though empty.
+
+### The palette: a hardware capture overrules Emma 02 (2026-08-19)
+
+The four colours first shipped as Emma 02's, from `Visicom/standard.xml`. They
+are wrong. `refvideo/Freeway [Toshiba Visicom COM-100 Longplay] (1978).mp4` is a
+capture of the built-in Freeway on a real machine, and sampling it gives:
+
+| | captured | Emma 02 | dist | MAME | dist |
+|---|---|---|---|---|---|
+| background | `#003700` | `#004000` | 9 | `#004000` | 9 |
+| colour 1 | `#B1ECE6` | `#70D0FF` | 75 | `#AFDFE4` | **13** |
+| colour 2 | `#DCE12D` | `#D0FF70` | 74 | `#B9C42F` | **45** |
+| colour 3 | `#FF3D46` | `#FF7070` | 66 | `#EF454A` | **18** |
+| | | | 225 | | **86** |
+
+So the core now uses MAME's `VISICOM_PALETTE`. The capture is a composite NTSC
+encode and its absolute levels are not trustworthy — but colour 1's *hue* is not
+a capture artefact: Emma has it blue-cyan, the hardware is a pale green-cyan.
+
+The capture is also a structural check, and the core passes it: same dark green
+field, same two dashed lane lines, same car sprites in the same two colours. Only
+the horizontal inset differs, which is the capture's own framing. Note the frame
+comparison could not have caught the palette — `tools/visicom-test.sh` works in
+colour *letters*, and the RGB values live in `RCAStudioII.sv`, which the Verilator
+harness does not even compile.
+
+### Verification
+
+There is no frame-by-frame reference for gameplay: `tools/refemu` covers the
+Studio II and the two Studio IIIs, and Emma 02 has no headless mode (§5). `tools/visicom-test.sh`
+covers it instead — every built-in and every cartridge, locked to the exact set
+of colours it puts on screen. Colours 2 and 3 need plane 1's bit, so any screen
+listing one is direct evidence the second read happened.
+
+The screens were checked by eye against Emma's own descriptions before being
+locked: Addition really is a two-player scoreboard, in cyan and yellow;
+`cas-190` really is a cyan border round the word HOROSCOPE; `cas-130` is a
+baseball diamond with a red bat and three scoreboards. That the two score groups
+come out solidly cyan and solidly yellow is also the evidence for the `+$200`
+offset specifically — a misaligned second plane would break them up.
+
+Start keys are Emma's (`Helpfiles/FaqVisicom*.htm`): built-ins on 1 Doodle,
+2 Bowling, 3 Patterns, 4 Freeway, 7 Addition, and every cartridge on 0. The
+gamepad Start button presses 0 on this machine rather than the usual 1.
+
+### The RAM that was never in block RAM
+
+Reading plane 1 through port B of the main RAM simulated perfectly and cost
+nothing visible: lint clean, every test green, frames correct. The Quartus build
+is where it showed — and it showed something older than this work.
+
+`output_files/RCAStudioII.map.rpt` reports which arrays became block memory. The
+main RAM was not among them:
+
+```
+Info (276009): RAM logic "...|dpram:sram|mem" is uninferred due to
+               unsupported read-during-write behavior
+
+dpram:sram   12,384 combinational ALUTs   6,160 registers   0 block memory bits
+```
+
+Reverting the plane-1 change did not fix it — the same message, at half the size
+(6,119 ALUTs). So the 512-byte RAM had **already** been built out of logic before
+any of this; using port B doubled the array and therefore doubled the damage,
+but did not cause it. The cause is that the CLEAR-clears-VRAM sequencer writes
+through port B: two active write ports mean mixed-port read-during-write, which
+an M10K cannot honour. The ROM `dpram` and the new `sram2` use the same module
+with port B tied off, and both infer cleanly — which is what identified it.
+
+Two fixes, measured separately against a full build each:
+
+| | ALMs | of device | block memory |
+|---|---|---|---|
+| plane 1 on port B (first attempt) | 18,384 | 44 % | 457,103 |
+| plane 1 in its own array | 14,096 | 34 % | 459,151 |
+| CLEAR wipe moved to port A | **10,310** | **25 %** | 463,247 |
+
+Timing closed on all three (+0.761, then +0.567 ns worst setup). The last row is
+within a few hundred ALMs of the 10,003 recorded before any colour work existed,
+which puts the real cost of the CDP1864, CDP1862, CDP1863 and the Visicom in
+perspective: a few hundred ALMs between them, against four thousand for one
+mis-inferred RAM.
+
+The second fix leaves `rtl/dpram.sv` alone and needs no `ramstyle` attribute: the
+wipe drives port A, which is safe because CLEAR is folded into reset, so the CPU
+is held in reset for its whole duration and is not driving the bus. Port B is now
+tied off entirely, matching the two instances that always worked.
+
+**The general lesson, because the Verilator harness cannot see any of this:**
+after changing anything about a memory's ports, check that it still appears in
+the `Inferred altsyncram megafunction` list in `output_files/*.map.rpt`. A RAM
+that falls into logic still fits, still closes timing, and passes every test in
+this repo.
+
+### One number that moved, and did not
+
+The Conic PAL sweep reads **16/28** over the Cartridges directory, against the
+14/28 recorded in §8. That is not a regression: stashing this work and re-running
+the identical command also gives 16/28, so the two figures are different metrics
+rather than a change. The old one was measured by hand and cannot be reproduced
+from the note.
+
+`tools/score-conic.sh` now defines it, and it covers all three Conic sets --
+Cartridges, Homebrew and the Sarnoff Collection -- so **it prints 22/38**. The
+16/28 above is the Cartridges subset of that. Quote the script's number, with the
+date.

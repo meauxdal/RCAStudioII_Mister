@@ -29,6 +29,9 @@ module pixie_video
     input             disp_off,
 
     input       [7:0] data_in,     
+    // Visicom COM-100: a second bit plane, delivered in the same DMA cycle
+    input             vis_mode,
+    input       [7:0] data_in2,
 
     output            DMAO,     
     output            INT,     
@@ -43,7 +46,16 @@ module pixie_video
     output            HSync,    
     output            VBlank,
     output            HBlank,
-    output            video_de  
+    output            video_de,
+    output            bitmap_de,
+    // CDP1862 hand-off, for the NTSC Studio III
+    input       [2:0] colour_in,
+    input             con,
+    input             bg_step,
+    output      [2:0] colour_out,
+    output      [1:0] vis_index,
+    output            bg_active,
+    output      [2:0] bg_colour_out  
 );
 
 // RCA Studio II
@@ -55,6 +67,8 @@ cdp1861 cdp1861 (
 
     .SC         (SC),           // I [1:0]
     .data_in    (data_in),      // I [7:0]  byte the CPU delivers during DMA-OUT
+    .vis_mode   (vis_mode),     // I
+    .data_in2   (data_in2),     // I [7:0]
     .disp_on    (disp_on),      // I
     .disp_off   (disp_off),     // I
 
@@ -68,7 +82,15 @@ cdp1861 cdp1861 (
     .HSync      (HSync),        // O
     .VBlank     (VBlank),       // O
     .HBlank     (HBlank),       // O
-    .video_de   (video_de)      // O
+    .video_de   (video_de),
+    .bitmap_de  (bitmap_de),     // O
+    .colour_in     (colour_in),
+    .con           (con),
+    .bg_step       (bg_step),
+    .vis_index  (vis_index),
+    .colour_out    (colour_out),
+    .bg_active     (bg_active),
+    .bg_colour_out (bg_colour_out)
 );
 
 endmodule

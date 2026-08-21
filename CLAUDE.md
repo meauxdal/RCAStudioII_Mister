@@ -2,6 +2,10 @@
 
 Guidance for working in this repo. Read this before changing RTL.
 
+**New to this repo? Read `docs/handoff.md` first** — it separates what is proven
+from what is merely believed, lists the seven things that will bite you, and
+ranks what to do next. This file is the working reference behind it.
+
 ---
 
 ## 1. What this is
@@ -19,17 +23,24 @@ assuming any timing number here was derived from first principles.
 
 **State of the core: playable.** The CPU has the full instruction set the BIOS
 needs, interrupts and DMA; the video is a real CDP1861 driven by DMA, not a RAM
-scraper. Frames are **pixel-identical to the reference emulator on 18 of 21**
-test cases (§9), the built-in BIOS games and controller profiles are in place,
+scraper. Frames are checked against the reference emulator by
+`tools/score-21.sh`, currently **26 of 48** (§9 explains why the rest differ and
+why that is expected), the built-in BIOS games and controller profiles are in place,
 the beeper and RTL ST2 loader are implemented, and the core builds clean in
 Quartus with timing closed (§4).
 
 Recent additions that matter for day-to-day use include the OSD-managed joystick
 profile system with its Auto/Manual split (the menu shows the detected profile
 instead of the word "Auto"), the default 8-way profile,
-Gunfighter/8-way/Doodles special cases, the Clear-only profile for digit-entry
+Gunfighter/8-way/Doodle special cases, the Clear-only profile for digit-entry
 software, the memory decode, and config-versioning so old saved menu state does
 not silently map to the wrong fields.
+
+The core now covers four machines, selected from the OSD: Studio II, Studio III
+PAL (a CDP1864), Studio III NTSC (a CDP1861 with a CDP1862 for colour and a
+CDP1863 for tone — a different chipset, not the same part retimed) and the
+Toshiba Visicom COM-100, whose colour comes from a second bit plane $200 above
+the first rather than from colour RAM. See `docs/succession-plan.md`.
 
 What is still missing: an embedded BIOS. (PAL is not missing — the Studio II
 never had it; see §7.1.) See §6.
@@ -194,10 +205,13 @@ DMA-OUT cycles.** The current core implements none of them (§6.1).
 | `RCAStudioII.sv` | MiSTer `emu` top: hps_io, PLL, OSD config string, video chain (video_mixer + video_freak), on-screen keypad |
 | `rtl/rcastudioii.sv` | Core glue: CPU + pixie + memory decode + keypad + joystick profiles + cartridge loader |
 | `rtl/cdp1802.v` | The CPU: full BIOS instruction set, interrupts, DMA, machine-cycle timing |
-| `rtl/dpram.sv` | Dual-port block RAM — instantiated twice, as the 4 KB ROM/cartridge image and the 512 B RAM |
+| `rtl/dpram.sv` | Dual-port block RAM — instantiated **three** times: the 4 KB ROM/cartridge image, the 512 B RAM, and the Visicom's 256 B second bit plane. Port B must stay tied off on any instance that has to infer as block RAM (§8) |
 | `rtl/numstick.sv` | Analog-stick on-screen keypad (Jaguar core's, via ColecoAdam) |
-| `rtl/pixie/pixie_video.v` | Thin wrapper |
-| `rtl/pixie/cdp1861.v` | The video: a real CDP1861, DMA-fed, no frame buffer |
+| `rtl/pixie/pixie_video.v` | Thin wrapper around `cdp1861.v` |
+| `rtl/pixie/cdp1861.v` | The NTSC video: a real CDP1861, DMA-fed, no frame buffer. Also carries the Visicom's second bit plane |
+| `rtl/pixie/cdp1864.v` | The PAL video: CDP1864 — video, colour and tone in one part. A sibling of `cdp1861.v`, deliberately not a parameterisation of it |
+| `rtl/pixie/cdp1862.v` | Colour generator for the NTSC Studio III |
+| `rtl/pixie/cdp1863.v` | Tone generator: the standalone 1863, and the 1864's internal divider |
 
 ### Files present but NOT compiled (dead / reference)
 `rtl/cosmac.v`, `rtl/dma.v`, `rtl/keypad.v`, `rtl/debounce.v`, `rtl/rom.v`,
@@ -236,13 +250,20 @@ tools/quartus-build.sh map      # analysis & synthesis only (~1.5 min)
 tools/quartus-build.sh clean
 ```
 
-Last known-good build: **0 errors**, timing closed (worst setup slack
-+0.710 ns), 10,003 ALMs (24 %), 444 kbit of block RAM (8 %), whole flow
-~6 minutes. Most of that is the MiSTer
-framework — `rcastudioii` itself is ~1,140 ALMs (of which the CPU is ~600) and
-`numstick` another ~940. The "19 %" quoted here previously was measured before
-numstick landed; a same-day A/B put the memory decode at **+86 ALMs and
-+4 kbit** over the pre-decode core, which is just the 512-byte RAM.
+Last known-good build (2026-08-19, all four machines): **0 errors**, timing
+closed (worst setup slack +0.567 ns, hold +0.242 ns), **10,310 ALMs (25 %)**,
+463 kbit of block RAM (8 %), 74 RAM blocks, whole flow ~6 minutes. Most of that
+is the MiSTer framework; `numstick` alone is ~940 ALMs.
+
+That is within a few hundred ALMs of the 10,003 recorded before any of the
+colour work, which is not a coincidence and is worth reading §10 (2026-08-19)
+for: the CDP1864, CDP1862, CDP1863 and the whole Visicom together cost a few
+hundred ALMs, while a single RAM that had quietly fallen out of block memory was
+costing four thousand. Three builds isolated it — 18,384 ALMs (44 %), then
+14,096 (34 %), then 10,310 (25 %) — and the check that catches it is in §8.
+
+An older note here put the memory decode at **+86 ALMs and +4 kbit** over the
+pre-decode core, which is just the 512-byte RAM.
 
 **Do not run `quartus_sh --flow compile`.** The image is amd64 under emulation
 on Apple Silicon, and the qsf's `NUM_PARALLEL_PROCESSORS ALL` makes Quartus fork
@@ -389,38 +410,56 @@ do not assume the R(0) story above.
 ### 6.2 Memory decode -- done (2026-08-15)
 Implemented; see §10. `tools/memdecode-test.sh` covers it.
 
-### 6.2b Retail Tennis/Squash is mapped to PADDLE -- open question (2026-08-17)
+### 6.2b Tennis/Squash is mapped to PADDLE -- a design choice, not a bug (2026-08-17)
 
-`6b5b999` (Elle's, merged 2026-08-17) folded the retail TV Arcade III hash onto
-the homebrew tennis line:
+An earlier version of this entry called Elle's `6b5b999` a regression on the
+grounds that it folded "two different cartridges" onto one line. **That was
+wrong, and this records the correction**, because the wrong version was published
+and could otherwise get acted on.
+
+The line in question:
 
 ```
--16'h88FB: begin map_profile <= MAP_CROSS;  start_key <= 4'd2; end   # retail
--16'hFB76: begin map_profile <= MAP_PADDLE; start_key <= 4'd1; end   # homebrew
+-16'h88FB: begin map_profile <= MAP_CROSS;  start_key <= 4'd2; end
+-16'hFB76: begin map_profile <= MAP_PADDLE; start_key <= 4'd1; end
 +16'h88FB, 16'hFB76: begin map_profile <= MAP_PADDLE; start_key <= 4'd1; end
 ```
 
-Those are **different cartridges**, not two dumps of one: `88FB` is retail TV
-Arcade III (two-player Tennis, and per the RCA manual it starts on `A2`; `A1` is
-one-player Squash), `FB76` is Paul Robson's single-player homebrew `tennis.st2`.
+`88FB` and `FB76` are **the same cartridge in two containers**, not two
+cartridges. Measured: `88FB` is TV Arcade III Tennis + Squash as a 512-byte
+`.bin`; `FB76` is the same title as a 768-byte `.st2`, whose payload is
+byte-identical to that `.bin` and whose header title field reads
+"TV ARCADE III TENNIS". They hash apart only because the CRC covers the file as
+downloaded, header and all -- which is exactly why the table already pairs
+`.st2` with `.bin` elsewhere (`16'hFBEF, 16'h2B4D` for Asteroids, and so on).
+So grouping them is *consistent with the table's own convention*, and there is
+no "homebrew tennis": nothing by Paul Robson of that name exists in any corpus
+here.
 
-Two things look wrong for the retail cartridge. `map_padA(MAP_PADDLE)` is empty
-(the case arm is literally `MAP_PADDLE: ;`) and `MAP_PADDLE` is in
-`profile_1p`, so in two-player Tennis both sticks collapse onto keypad B and
-player A has no pad at all. And Start now presses `A1`, which starts the wrong
-game.
+What is left is one design question about one game, not a conflation. The
+cartridge holds two games: **Tennis** is two-player and starts on `A2`,
+**Squash** is one-player and starts on `A1` (Readme, from the RCA manual).
+`MAP_PADDLE` is keypad-B-only and sits in `profile_1p`, and the new start key is
+`A1`. That is a coherent package: it gives a gamepad user **Squash**, which one
+stick can actually play, instead of Tennis, which needs two keypads. The previous
+`MAP_CROSS` + `A2` gave Tennis, which a single pad plays only half of.
 
-**Deliberately left as-is** pending Elle's reasoning — she may have hardware
-findings the code does not show. Do not "fix" it without asking her first. Note
-the frame comparison cannot demonstrate this: retail Tennis does not visibly
-respond to held stick input in the harness, so the evidence is the code path,
-not a screenshot. If it is to be reverted, the previous mapping was `MAP_CROSS`
-with `start_key <= 4'd2`.
+So both mappings are defensible and the choice is Elle's to make. Left as-is.
+If it is ever revisited, the trade is "Squash with a pad" against "Tennis with
+two pads", not correct against incorrect. Note the frame harness cannot
+distinguish them: retail Tennis does not visibly respond to held stick input in
+these scenarios.
 
 ### 6.3 Top level — `RCAStudioII.sv`
-- No PAL support, and the BIOS is not embedded (the core is held in reset until
-  one is loaded). The rest of the old list — aspect ratio, `CE_PIXEL`, the dead
-  `clk_1m76` — is fixed; see §10 (2026-08-14).
+- **The BIOS is not embedded**, so the core is held in reset until one is loaded
+  from the OSD. This is the single biggest piece of user-facing friction left.
+- **Analog video is emitted but has never been seen on a TV.** The raster is
+  right against the datasheet and the sim; nobody has plugged in an analog IO
+  board. See `docs/analog-video.md` for what to do and how to tell.
+- PAL is no longer missing — it arrived with the CDP1864 (Studio III PAL). It was
+  never a Studio II feature; see §7.1.
+- The rest of the old list — aspect ratio, `CE_PIXEL`, the dead `clk_1m76` — is
+  fixed; see §10 (2026-08-14).
 
 ### 6.4 Minor
 - `sys/` is shared framework code and must not be edited; the remaining Quartus
@@ -433,8 +472,9 @@ with `start_key <= 4'd2`.
 ## 7. Roadmap
 
 ### 7.1 Polish
-Embedded BIOS, and any final top-level cleanup around default OSD behaviour and
-naming consistency.
+Embedded BIOS, analog-video verification on real hardware
+(`docs/analog-video.md`), and any final top-level cleanup around default OSD
+behaviour and naming consistency. `docs/handoff.md` §5 ranks these.
 
 **"PAL option" used to be listed here and has been removed as a mistake.** There
 was no PAL Studio II: the CDP1861 is NTSC-only (MAME hard-codes 262 scanlines
@@ -445,6 +485,11 @@ already handles PAL displays without touching core timing. PAL is native to the
 **CDP1864** instead — see §7.4 and `docs/succession-plan.md` §2.0.
 
 ### 7.4 The next machines — see `docs/succession-plan.md`
+
+**Done as of 2026-08-19.** All four machines the core will carry are in: Studio
+II, Studio III PAL (CDP1864), Studio III NTSC (CDP1861 + 1862 + 1863) and the
+Toshiba Visicom COM-100. The Studio IV is deliberately *not* — it shares the
+1802 and nothing else, and belongs in its own core (succession plan §10).
 
 Which machines follow the Studio II, in what order, and what software we hold
 for each. Headline: the CPU-side contract does not change (MAME drives the
@@ -471,9 +516,19 @@ its profile entries.
 
 ### 7.3 Keep the comparison green
 Any RTL change should be re-checked against the reference emulator (§9) before
-committing. The regression is cheap — a few seconds per cartridge. Changes that
-touch memory should also run `tools/memdecode-test.sh`, which no cartridge in
-the corpus can substitute for (§9).
+committing. The regression is cheap — a few seconds per cartridge. The full set,
+in the order they are cheapest to run:
+
+| Script | What it covers | Expected |
+|--------|----------------|----------|
+| `tools/memdecode-test.sh` | the memory decode, which no cartridge in the corpus exercises (§9) | 8/8 |
+| `tools/tone-test.sh` | the CDP1863/1864 tone divider, which no frame can show | 7/7 |
+| `tools/visicom-test.sh` | the Visicom, which has no reference emulator | all ok |
+| `tools/score-21.sh` | the §9 Studio II score, documented start sequences | 26/48 |
+| `tools/score-conic.sh` | the Studio III PAL sweep, uniform A1 | 22/38 |
+
+The last two are comparisons against `tools/refemu` and will move when its cycle
+model does; the first three are directed tests and should not move at all.
 
 ---
 
@@ -487,6 +542,12 @@ the corpus can substitute for (§9).
 - Keep the PLL in `rtl/pll*`; the framework requires it there.
 - Prefer deleting dead code over commenting it out. This tree is already hard to
   read because so much of it is commented-out history — git has that.
+- After changing anything about a memory's ports, run at least
+  `tools/quartus-build.sh map` and check the RAM still appears in the
+  `Inferred altsyncram megafunction` list in `output_files/RCAStudioII.map.rpt`.
+  A memory that falls out of block RAM into logic costs thousands of ALMs, still
+  fits, still closes timing, and is invisible to every simulation in this repo
+  (§10, 2026-08-19).
 - When changing timing or video, state which reference you matched against
   (MAME / Emma 02 / rca-studio2 / AVI1861) in the commit message.
 
@@ -531,11 +592,17 @@ cd ../../../../verilator
 diff /tmp/c.txt /tmp/r.txt        # expect no output
 ```
 
-Current score: **18 / 21 pixel-identical** (3 built-in-game frames + 18
-cartridges). The three that differ — `86677b`, `87201`, `Concentration Match` —
-render the same structure and the same number of content lines but different
-game state, because the BIOS updates an RNG seed in the ISR and any timing
-difference deals different cards.
+Current score: **26 / 48 frames**, from `tools/score-21.sh` — 5 built-in games
+and 19 cartridge scenarios, two frames each, each driven with its documented
+start sequence. (An older note here said "18 / 21"; that was a different,
+hand-run set and is not comparable. The script defines the number.)
+
+Most of what differs is game state rather than rendering: the BIOS updates an RNG
+seed in its ISR, so any timing difference deals different cards, drops different
+pieces and puts sprites elsewhere. `tools/contact-sheet.py` renders the whole
+library side by side with a per-title percentage of differing scanlines, which is
+the way to tell state from breakage — anything under ~30% is almost always the
+former.
 
 Note on `86677b` and `87201`: the reference emulator renders **full-screen
 random noise** for both from the first frame, before any input. They are not
@@ -545,15 +612,29 @@ their output is free to change without that meaning anything. Do not chase them.
 **What the frame comparison cannot see.** Nothing in the corpus — 18 retail
 cartridges, 8 homebrew, 5 TOSEC `.st2` — reads or writes a RAM mirror, or any
 address above `$0FFF`. The whole memory decode is therefore invisible to it:
-the old truncate-to-12-bits version scored exactly the same 18/21. That is what
+the old truncate-to-12-bits version scored exactly the same. That is what
 `tools/memdecode-test.sh` is for — a hand-assembled 90-byte native-1802
 cartridge that pokes each case and checks the result out of the simulated RAM.
 It fails 4 of its 8 checks against the pre-decode core.
 
-**The reference is authoritative for instruction *order*, not for cycle
-timing.** Its model gives the CPU zero cycles during all 128 display lines
-rather than 6 of every 14, so it runs ~952 instructions/frame where real
-hardware (and the RTL) does **1321**. Do not "fix" the RTL to match 952.
+**The reference's cycle model was corrected on 2026-08-17 and now matches
+hardware's instruction rate, but it is still not cycle-accurate.** It used to give
+the CPU no cycles at all during the 128 display lines, so it ran ~952
+instructions/frame against hardware's 1321 -- a 28% shortfall, and the reason the
+old warning here said "do not fix the RTL to match 952". It now also gets the 6
+of every 14 cycles that the CPU keeps while DMA takes the other 8, and measures
+**1322/frame** against hardware's 1321.
+
+That fixed the *total* and not the *distribution*. The model has no scanline
+counter, so those display-window cycles all arrive in one lump before the next
+interrupt rather than interleaved between DMA bursts, and `CPU_ReadEFlag(1)`
+still returns a constant 1 -- so software that spins on EF1 or counts cycles
+across the display window still cannot be modelled. Measured effect: the §9 score
+did not move (27 -> 26 of 48 frames, three cases shifting by one frame each,
+which is animation-phase noise), while on the CDP1864 colour demo the reference
+went from 4 distinct colour states to 7 against the RTL's 9 -- closer, but still
+with none in common. So it is a fidelity improvement rather than an accuracy one.
+`tools/score-21.sh` measures the score; there was no script for it before.
 
 For CPU debugging both sims emit the same trace layout; strip the differing
 first and last columns to diff them:
@@ -570,6 +651,93 @@ cartridges including an RCA test cart.
 ---
 
 ## 10. What changed
+
+### 2026-08-19 — the Toshiba Visicom COM-100, and two bytes per DMA cycle
+
+The fourth and last machine. It is sold as a Studio III relative and Robson's
+`visicom.txt` calls it a "clone of the Studio 3", but it is neither: it has the
+plain monochrome CDP1861, no colour RAM, no CDP1862 and no tone generator, and
+its RAM is at `$1000` rather than `$0800`. `is_studio3` had to stop meaning "not
+a Studio II", which would have handed it all three.
+
+Colour comes from somewhere no other machine here puts it. Emma 02's
+`Cdp1802::visicomDmaOut` reads **two** bytes per DMA cycle — `M(R(0))` and
+`M(R(0)+$200)` — and takes the top bit of each, so the picture is two bit planes
+512 apart and every pixel is one of four fixed colours. Implemented as a second
+line buffer and shift register inside `cdp1861.v`, fed from **its own 256-byte
+array** addressed by A7-A0 — the same low byte serves both of its roles, since
+the video reads it during a DMA cycle (address bus = `R(0)` = `$11xx`) and the
+CPU at `$13xx`, and the CPU is not driving the bus during DMA. Both planes
+arrive in the same cycle with matched latency.
+
+The four colours are fixed RGB values, not combinations of three colour pins, so
+they cannot ride the `{R,G,B}` bus the 1864 defined. `RCAStudioII.sv` applies the
+palette; the bus still carries a 3-bit approximation so the Verilator harness
+keeps working unchanged.
+
+Two smaller things the machine needed: `OUT 1` enables its display where every
+other machine here uses `INP 1` (Emma's `<out type="on">1</out>` parses to
+`PIXIE_OUT_OUT` with only the enable populated, and there is no disable port at
+all); and `st2_pg_ok` had to learn that `$08`/`$09` are cartridge space rather
+than RAM. All six dumped cartridges page exactly `$08-$0F`, so under the Studio
+II rule the whole image was dropped and the machine booted to its built-ins as
+though nothing were inserted.
+
+Matched against **Emma 02** for behaviour — it is the only emulator that models
+this machine, and it states the video rule in five lines where MAME's
+`visicom.cpp` states it in bitfields. But **not** for the palette: Emma's four
+colours and MAME's differ, and `refvideo/Freeway [Toshiba Visicom COM-100
+Longplay] (1978).mp4` — a capture of the built-in Freeway on real hardware —
+settles it at summed RGB distance 86 for MAME against 225 for Emma. Emma has
+colour 1 blue-cyan where the machine is a pale green-cyan, which is a hue
+difference rather than a capture artefact, so the core uses MAME's values. The
+same capture is a structural check the core passes: same field, same two dashed
+lanes, same car sprites. Nothing in the test suite could have caught this —
+`tools/visicom-test.sh` works in colour *letters*, and the RGB lives in
+`RCAStudioII.sv`, which the Verilator harness does not compile.
+
+Verified by `tools/visicom-test.sh` (new): five built-in games and six
+cartridges, each locked to the exact set of colours it puts on screen, after the
+screens were checked by eye against Emma's own descriptions. Colours 2 and 3
+require plane 1's bit, so any screen listing one is direct evidence the second
+read happened. The Studio II side is unmoved: §9 26/48, memory decode 8/8, tone
+8/8, and Invaders still animates from its `.st2`.
+
+**A synthesis defect the simulator could not see — and it predates this work.**
+Plane 1 was first read through port B of the main RAM, whose read half was
+unused. That simulated perfectly and cost 8,000 ALMs. But reverting it did not
+restore them: `output_files/RCAStudioII.map.rpt` still said
+
+```
+Info (276009): RAM logic "...|dpram:sram|mem" is uninferred due to
+               unsupported read-during-write behavior
+```
+
+with the 512-byte RAM at 6,119 ALUTs and **0 block memory bits**. So it had
+already been built out of logic; using port B doubled the array and doubled the
+damage rather than causing it. The cause is the CLEAR-clears-VRAM sequencer
+writing through port B — two active write ports give mixed-port read-during-
+write, which an M10K cannot honour. The ROM `dpram` and the new `sram2` use the
+same module with port B tied off and both infer, which is what identified it.
+
+Fixed by moving the wipe to port A, which is safe because CLEAR is folded into
+reset so the CPU is held in reset throughout. No `ramstyle` attribute and no
+change to the shared `rtl/dpram.sv`. Measured across three full builds:
+18,384 ALMs (44%) with plane 1 on port B, 14,096 (34%) once plane 1 got its own
+array, and lower again with the wipe moved.
+
+**The lesson: after changing anything about a memory's ports, check the
+`Inferred altsyncram megafunction` list in `output_files/*.map.rpt`.** A RAM that
+falls into logic still fits, still closes timing, and passes every test here.
+
+Also here: `tools/score-conic.sh`, because the "14/28" recorded for the Studio
+III PAL sweep could not be reproduced from the note. The obvious uniform-A1 sweep
+over the Cartridges directory gives **16/28** both with and without this work —
+measured by stashing it and re-running the identical command — so the two are
+different metrics, not a regression. The script defines the number from here on,
+and because it covers all three Conic sets (Cartridges, Homebrew, Sarnoff) it
+prints **22/38**; 16/28 is the Cartridges subset of that.
+
 
 ### 2026-08-16 — Hockey/Combat "flashing strobes": INT/EFx lead the line by one cycle (AVI1861), parity-adaptive DMA request, open bus = $FF
 
@@ -721,7 +889,7 @@ cosmac does the same). Fixed in `rtl/cdp1802.v` (FETCH no longer yields to DMA;
 until its 8 cycles are actually serviced rather than for a positional window,
 dropping at the 7th acknowledge because the CPU commits one more cycle after
 the request falls — holding it a cycle longer ran 9 cycles/line and R(0)
-drifted +1 a line (Doodles lost its dot; that is the symptom to check).
+drifted +1 a line (Doodle lost its dot; that is the symptom to check).
 
 Verified: the whole corpus — 5 built-ins, 8 homebrews in both formats — is
 **pixel-identical to the pre-fix RTL** at the test frames, the memory-decode
@@ -863,7 +1031,7 @@ uses 4/5/6 for racquet size, and Space War fires on keypad A while steering on
 keypad B. Presses are OR'd with the keyboard. Unknown cartridges get `8WAY`.
 
 The five BIOS built-ins have no cartridge to CRC, so they are told apart by the
-key that starts them (A1 Doodles, A2 Patterns, A3 Bowling, A4 Freeway, A5
+key that starts them (A1 Doodle, A2 Patterns, A3 Bowling, A4 Freeway, A5
 Addition), latching on the first press after reset only -- those keys are reused
 during play. An OSD "Joystick" setting overrides the whole thing, since the table
 can only be as good as its entries.

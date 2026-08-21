@@ -35,7 +35,7 @@ run() {  # $1=label $2=cart-or-"-"  rest=press args
 }
 
 echo "Built-in games (BIOS):"
-run "Doodles  (A1)"        -  --press a1@40:20
+run "Doodle   (A1)"        -  --press a1@40:20
 run "Patterns (A2)"        -  --press a2@40:20
 run "Freeway  (A3, B0 go)" -  --press a3@40:20 --press b0@120:20
 run "Bowling  (A4, A5 roll)" - --press a4@40:20 --press a5@160:20

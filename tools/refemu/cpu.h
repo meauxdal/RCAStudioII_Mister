@@ -48,6 +48,7 @@ BYTE8 CPU_GetRowScale();                    // scanlines per logical row: 4 or 6
 BYTE8 CPU_GetColour(BYTE8 pageOffset);      // 0-7, dot colour for that byte
 BYTE8 CPU_GetBackgroundColour();            // 0-7, current background
 BYTE8 CPU_GetColourEnabled();               // colour RAM written since reset (CON)
+BYTE8 CPU_GetColourCell(BYTE8 cell);        // raw colour RAM cell 0..63, in 1864 pin order
 
 #ifdef CPUSTATECODE
 

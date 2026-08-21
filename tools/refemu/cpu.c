@@ -33,8 +33,27 @@
 // approx 8m per second, this means each instruction is limited to 8,000,000 / 56,280 * (128/312.5) about 58 AVR instructions for each
 // 1802 instructions.
 
-// State 1 : 1876 cycles till interrupt N1 = 0
+// State 1 : cycles till interrupt, N1 = 0
 // State 2 : 29 cycles with N1 = 1
+//
+//  The CPU does not stop during the display window -- it loses only the 8 machine
+//  cycles a line that DMA actually steals, out of 14. This model has no intra-frame
+//  position (no scanline counter), so the display allowance is simply added to
+//  State 1's budget: what matters is the total number of cycles the CPU gets
+//  between one interrupt and the next.
+//
+//  Originally the display period was skipped entirely, which cost the CPU 40% of
+//  its time: 952 instructions a frame against real hardware's 1321 on the Studio
+//  II, and a measured 854 against the RTL's 1485 on the MPT-02. Anything computing
+//  during the display window then diverged from hardware for reasons of its own --
+//  which is what made the Sarnoff colour demo useless as a check.
+//
+//      Studio II  (262 lines, 128 displayed): 1876 + 128*6 = 2644 -> 1322 instr
+//      MPT-02     (312 lines, 192 displayed): 1680 + 192*6 = 2832 -> 1416 instr
+//
+//  Both now land on what the RTL and the hardware do.
+#define DMA_CYCLES_PER_LINE     (8)                                                 // 8 of the 14 go to display DMA
+#define CPU_CYCLES_PER_DISPLAY_LINE (CYCLES_PER_LINE-DMA_CYCLES_PER_LINE)
 
 #define STATE_1_CYCLES          (state1Cycles)
 #define STATE_2_CYCLES          (29)
@@ -54,7 +73,12 @@
 #define MPT02_VISIBLE_LINES     (192)
 #define MPT02_EXEC_CYCLES       ((MPT02_LINES_PER_FRAME-MPT02_VISIBLE_LINES)*MPT02_CYCLES_PER_LINE)
 
-static INT16 state1Cycles = EXEC_CYCLES_PER_FRAME;                                  // set by CPU_SetMachine()
+//  Non-display budget, plus the CPU's share of the display window, less the 29
+//  cycles State 2 accounts for separately.
+#define STUDIO2_STATE1  (EXEC_CYCLES_PER_FRAME - 29 + VISIBLE_LINES*CPU_CYCLES_PER_DISPLAY_LINE)
+#define MPT02_STATE1    (MPT02_EXEC_CYCLES     - 29 + MPT02_VISIBLE_LINES*CPU_CYCLES_PER_DISPLAY_LINE)
+
+static INT16 state1Cycles = STUDIO2_STATE1;                                         // set by CPU_SetMachine()
 static BYTE8 machineType  = MACHINE_STUDIO2;
 static BYTE8 rowScale     = ROW_SCALE_STUDIO2;
 
@@ -123,6 +147,11 @@ BYTE8 CPU_GetColourEnabled()
     return colourEnabled;
 }
 
+BYTE8 CPU_GetColourCell(BYTE8 cell)
+{
+    return colourRAM[cell & (COLOUR_CELLS-1)];
+}
+
 BYTE8 CPU_GetMachine()  { return machineType; }
 BYTE8 CPU_GetRowScale() { return rowScale; }
 
@@ -131,12 +160,12 @@ void CPU_SetMachine(BYTE8 machine)
     machineType  = machine;
     if (machine == MACHINE_MPT02)
     {
-        state1Cycles = MPT02_EXEC_CYCLES;
+        state1Cycles = MPT02_STATE1;
         rowScale     = ROW_SCALE_MPT02;
     }
     else
     {
-        state1Cycles = EXEC_CYCLES_PER_FRAME;
+        state1Cycles = STUDIO2_STATE1;
         rowScale     = ROW_SCALE_STUDIO2;
     }
 }

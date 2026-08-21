@@ -36,6 +36,7 @@
 #define PIX(sig)  (top->rootp->top__DOT__rcastudio__DOT__pixie_video__DOT__cdp1861__DOT__##sig)
 #define DPRAM     (top->rootp->top__DOT__rcastudio__DOT__dpram__DOT__mem)   // ROM/cart image, $0000-$0FFF
 #define SRAM      (top->rootp->top__DOT__rcastudio__DOT__sram__DOT__mem)    // the 512 bytes of RAM, $0800-$09FF
+#define COLRAM    (top->rootp->top__DOT__rcastudio__DOT__colour_ram)         // 64 CDP1864 colour cells
 
 static Vtop* top = nullptr;
 static vluint64_t main_time = 0;
@@ -351,7 +352,7 @@ static void dump_state(FILE* f, long frame, const FrameGrabber& fg, bool with_vr
 
     fprintf(f, "-- Cartridge mapping --\n");
     {
-        static const char* pn[] = {"NONE","CROSS","SPACEWAR","FREEWAY","BOWLING","BASEBALL","HOMEBREW","GUNFIGHTER","8WAY","DOODLES","HB2P","UNMAPPED","LEGACY-PADDLE"};
+        static const char* pn[] = {"NONE","CROSS","SPACEWAR","FREEWAY","BOWLING","BASEBALL","HOMEBREW","GUNFIGHTER","8WAY","DOODLE","HB2P","UNMAPPED","LEGACY-PADDLE"};
         int pr = top->rootp->top__DOT__rcastudio__DOT__profile;
         fprintf(f, "  cart CRC16 %04X  ->  profile %d (%s)\n",
                 top->rootp->top__DOT__rcastudio__DOT__cart_crc, pr,
@@ -370,6 +371,18 @@ static void dump_state(FILE* f, long frame, const FrameGrabber& fg, bool with_vr
     fprintf(f, "  keylatch %X  playerA %03X  playerB %03X\n",
             RS(keylatch), RS(playerA), RS(playerB));
 
+    // The 64 CDP1864 colour cells, laid out as they appear on screen: 8 columns
+    // across by 8 row-groups down. Printed in the 1864's own pin order, matching
+    // tools/refemu's --colour, so the two can be diffed without a permutation in
+    // the way.
+    if (with_vram && (RS(machine) == 1)) {
+        fprintf(f, "-- CDP1864 colour RAM (row group x column), 1864 pin order --\n");
+        for (int g = 0; g < 8; g++) {
+            fprintf(f, "  g%d:", g);
+            for (int c = 0; c < 8; c++) fprintf(f, " %d", (int)COLRAM[g * 8 + c]);
+            fprintf(f, "\n");
+        }
+    }
     if (with_vram) {
         fprintf(f, "-- Display RAM $0900-$09FF --\n");
         for (int r = 0; r < 256; r += 16) {
@@ -418,11 +431,21 @@ static void usage(const char* argv0) {
 "    --vram               include $0800-$09FF hexdumps in state dumps\n"
 "    --dump-file FILE     write dumps here instead of stdout\n"
 "\n"
+"  Machine\n"
+"    --machine NAME       studio2 (default), mpt02/studio3 (PAL CDP1864),\n"
+"                         studio3ntsc (CDP1861 + 1862 colour + 1863 tone), or\n"
+"                         visicom (Toshiba COM-100). The Studio IIIs are colour\n"
+"                         machines: PAL is a 312-line frame with 192 display\n"
+"                         lines and colour RAM at $B00. The Visicom is NTSC like\n"
+"                         the Studio II but gets its colour from a second bit\n"
+"                         plane $200 above the first, so it has no colour RAM.\n"
+"                         Each needs its own --bios.\n"
+"\n"
 "  Input\n"
 "    --joy-map N          OSD \"Joystick\" profile, and switch \"Mapping\" to Manual:\n"
 "                         0 none/keypad-only, 1 cross, 2 spacewar, 3 freeway,\n"
 "                         4 bowling, 5 baseball, 6 homebrew, 7 gunfighter,\n"
-"                         8 8-way, 9 doodles, 10 2P homebrew, 11 unmapped,\n"
+"                         8 8-way, 9 doodle, 10 2P homebrew, 11 unmapped,\n"
 "                         12 paddle (legacy). Omit for auto-detection.\n"
 "    --joy MASK@F[:H]     drive joystick 0 with MASK (bit0 right, 1 left, 2 down,\n"
 "                         3 up, 4 fire, 5 extra, 6 start, 17:8 A0..A9,\n"
@@ -480,8 +503,16 @@ int main(int argc, char** argv) {
     uint32_t joy_mask = 0; long joy_from = -1, joy_to = -1;
     uint32_t joy2_mask = 0; long joy2_from = -1, joy2_to = -1;
     std::string swap_file; long swap_frame = -1; bool swap_done = false;
+    // Mid-run firmware load and machine switch, to replay the OSD flow of
+    // switching machines on a running core (docs/handoff.md, 2026-08-19).
+    std::string swap0_file; long swap0_frame = -1; bool swap0_done = false;
+    uint8_t  machine_at = 0; long machine_at_frame = -1; bool machine_at_done = false;
     uint8_t  joy_override = 0;   // applied once top exists
     bool     joy_manual   = false;
+    uint8_t  machine = 0;   // 0 studio2, 1 studio3 PAL, 2 studio3 NTSC, 3 Visicom
+    bool     ce_div4 = false;  // run the hardware's /4 pixel enable (4x slower)
+    uint32_t ram_junk_seed = 0;  // pre-fill RAM with junk (0 = boot with zeroed RAM)
+    long     press_phase = 0;    // delay key events N clks past their frame boundary
     uint8_t  players_mode = 0;
     // Q gates the Studio II's beeper; track its edges so the core can be compared
     // against the reference emulator's Q even though AUDIO_L/R are still tied off.
@@ -542,12 +573,42 @@ int main(int argc, char** argv) {
             joy2_from = atol(rest.c_str()); joy2_to = joy2_from + hold;
         }
         else if (a == "--players")    players_mode = (uint8_t)atoi(next("--players"));
+        else if (a == "--swap0") {
+            std::string t = next("--swap0");
+            size_t at = t.rfind('@');
+            if (at == std::string::npos) { fprintf(stderr, "error: --swap0 needs FILE@FRAME\n"); exit(1); }
+            swap0_file = t.substr(0, at);
+            swap0_frame = atol(t.c_str() + at + 1);
+        }
+        else if (a == "--machine-at") {
+            std::string t = next("--machine-at");
+            size_t at = t.rfind('@');
+            if (at == std::string::npos) { fprintf(stderr, "error: --machine-at needs NAME@FRAME\n"); exit(1); }
+            std::string m = t.substr(0, at);
+            machine_at_frame = atol(t.c_str() + at + 1);
+            if      (m == "studio2") machine_at = 0;
+            else if (m == "mpt02" || m == "studio3" || m == "studio3pal") machine_at = 1;
+            else if (m == "studio3ntsc" || m == "ntsc") machine_at = 2;
+            else if (m == "visicom" || m == "com100") machine_at = 3;
+            else { fprintf(stderr, "error: unknown machine %s\n", m.c_str()); exit(1); }
+        }
         else if (a == "--swap") {
             std::string t = next("--swap");
             size_t at = t.rfind('@');
             if (at == std::string::npos) { fprintf(stderr,"error: --swap needs FILE@FRAME\n"); exit(1); }
             swap_file = t.substr(0, at);
             swap_frame = atol(t.c_str() + at + 1);
+        }
+        else if (a == "--ce4")     ce_div4 = true;
+        else if (a == "--ram-junk") ram_junk_seed = (uint32_t)strtoul(next("--ram-junk"), nullptr, 0);
+        else if (a == "--press-phase") press_phase = atol(next("--press-phase"));
+        else if (a == "--machine") {
+            std::string m = next("--machine");
+            if      (m == "studio2") machine = 0;
+            else if (m == "mpt02" || m == "studio3" || m == "studio3pal") machine = 1;
+            else if (m == "studio3ntsc" || m == "ntsc") machine = 2;
+            else if (m == "visicom" || m == "com100") machine = 3;
+            else { fprintf(stderr, "error: --machine must be studio2, mpt02/studio3, studio3ntsc or visicom\n"); return 1; }
         }
         else if (a == "--joy-map") { joy_override = (uint8_t)atoi(next("--joy-map")); joy_manual = true; }
         else if (a == "--trace-q")    trace_q = true;
@@ -605,6 +666,8 @@ int main(int argc, char** argv) {
     top = new Vtop();
     top->joy_override = joy_override;
     top->joy_manual   = joy_manual;
+    top->machine = machine;
+    top->ce_div4 = ce_div4 ? 1 : 0;
     top->players = players_mode;
 
     IoctlDriver io;
@@ -619,10 +682,26 @@ int main(int argc, char** argv) {
     top->ps2_key = 0; top->inputs = 0;
     top->eval();
 
+    // Pre-fill the RAM arrays with junk before the machine boots. On hardware
+    // the 512-byte RAM (and the Visicom's plane-1 RAM) is wiped only by CLEAR:
+    // it survives firmware/cartridge loads and OSD machine switches, so a
+    // Visicom booted after a Studio II session starts with the Studio II's
+    // leftovers. The sim's arrays start zeroed, which hid the Visicom
+    // display-base rotation (docs/handoff.md, 2026-08-19). A simple xorshift
+    // keyed by --ram-junk SEED makes that difference reproducible.
+    if (ram_junk_seed) {
+        uint32_t s = ram_junk_seed;
+        auto nxt = [&s]() { s ^= s << 13; s ^= s >> 17; s ^= s << 5; return (uint8_t)s; };
+        for (int i = 0; i < 512; i++) SRAM[i] = nxt();
+        for (int i = 0; i < 256; i++)
+            top->rootp->top__DOT__rcastudio__DOT__sram2__DOT__mem[i] = nxt();
+    }
+
     long cycles = 0;
     int  clk24_div = 0;
     bool ps2_toggle = false;
     long last_reported = -1;
+    long clks_in_frame = 0;
 
     while (fg.frame <= frames && cycles < max_cycles && !Verilated::gotFinish()) {
 
@@ -632,12 +711,27 @@ int main(int argc, char** argv) {
             io.finished = false;
             swap_done = true;
         }
+        if (!machine_at_done && machine_at_frame >= 0 && fg.frame >= machine_at_frame) {
+            top->machine = machine_at;
+            machine_at_done = true;
+        }
+        if (!swap0_done && swap0_frame >= 0 && fg.frame >= swap0_frame) {
+            io.add(swap0_file, 0);
+            io.finished = false;
+            swap0_done = true;
+        }
         io.tick();
         top->joystick_0 = (fg.frame >= joy_from && fg.frame < joy_to) ? joy_mask : 0;
         top->joystick_1 = (fg.frame >= joy2_from && fg.frame < joy2_to) ? joy2_mask : 0;
 
-        // Key events scheduled for this frame
+        // Key events scheduled for this frame. --press-phase delays them N
+        // clks past the frame boundary: a real key lands at an arbitrary
+        // machine cycle, and the phase at which the software's poll loop sees
+        // it propagates into everything it does next (display enables, ISR
+        // locks). Injecting only at frame boundaries samples exactly one of
+        // those phases.
         auto range = key_sched.equal_range(fg.frame);
+        if (clks_in_frame < press_phase) range.second = range.first;  // not yet
         for (auto it = range.first; it != range.second; ) {
             ps2_toggle = !ps2_toggle;
             top->ps2_key = (uint16_t)((ps2_toggle ? (1 << 10) : 0) |
@@ -718,10 +812,16 @@ int main(int argc, char** argv) {
         }
 
         // Sample video on the rising edge (ce_pix is tied high in sim.v)
-        bool boundary = fg.clock(top->VGA_VS, top->VGA_HS, top->VGA_DE,
+        // Capture the bitmap window, not the whole raster. The core emits a full
+        // NTSC/PAL raster now (border painted in the background colour), so
+        // VGA_DE would give 88x242 / 88x292 frames and invalidate every recorded
+        // score. bitmap_de marks the 64x128 / 64x192 bitmap alone.
+        bool boundary = fg.clock(top->VGA_VS, top->VGA_HS,
+                                 top->rootp->top__DOT__bitmap_de != 0,
                                  (uint8_t)((top->VGA_R ? 4 : 0) |
                                            (top->VGA_G ? 2 : 0) |
                                            (top->VGA_B ? 1 : 0)));
+        if (boundary) clks_in_frame = 0; else clks_in_frame++;
 
         {
             bool a_now = top->rootp->top__DOT__audio != 0;
@@ -783,6 +883,7 @@ int main(int argc, char** argv) {
     }
 
     printf("\n");
+    printf("audio: %ld output edges, %ld Q edges\n", a_edges, q_edges);
     printf("done: %ld frames in %ld cycles\n", fg.frame, cycles);
     printf("      last frame %dx%d, hash %08X, %s\n",
            fg.last_width, fg.last_height, fg.hash(),

@@ -42,6 +42,14 @@ while [[ ${1:-} == --machine || ${1:-} == --bios ]]; do
       --bios)    BIOS="$2";    shift 2 ;;
     esac
 done
+if [[ "$MACHINE" == visicom ]]; then
+    # tools/refemu has no Visicom, so there is nothing to compare against. Say so
+    # rather than silently diffing against a Studio II run.
+    echo "error: --machine visicom is not supported here -- tools/refemu models the" >&2
+    echo "       Studio II and the two Studio IIIs only, so there is no reference" >&2
+    echo "       frame to diff against. Run the RTL sim directly instead." >&2
+    exit 2
+fi
 if [[ "$MACHINE" != studio2 ]]; then
     ROWS=6                              # the CDP1864 machines show 32 rows over 192 lines
     if [[ "$BIOS" == "$ROOT/rom/studio2.rom" ]]; then
@@ -79,7 +87,7 @@ ref_opts=( --machine "$MACHINE" )
 "$REF" "${ref_opts[@]}" --frames "$FRAMES" ${PRESS[@]+"${PRESS[@]}"} "${shot_args[@]}" --ascii --quiet --outdir "$TMP" ${cart_ref[@]+"${cart_ref[@]}"} 2>/dev/null \
   | grep -E "^  [.#BGCRMY]+$" | sed 's/^  //' | tr '.' ' ' | awk -v n="$ROWS" '{for(i=0;i<n;i++) print}' > "$TMP/ref.txt"
 # the RTL sim defaults to ../rom/studio2.rom, which is relative to verilator/
-"$RTL" --bios "$BIOS" --frames "$FRAMES" ${PRESS[@]+"${PRESS[@]}"} "${shot_args[@]}" --ascii --outdir "$TMP" --prefix r ${cart_rtl[@]+"${cart_rtl[@]}"} 2>/dev/null \
+"$RTL" --machine "$MACHINE" --bios "$BIOS" --frames "$FRAMES" ${PRESS[@]+"${PRESS[@]}"} "${shot_args[@]}" --ascii --outdir "$TMP" --prefix r ${cart_rtl[@]+"${cart_rtl[@]}"} 2>/dev/null \
   | grep -E "^ *[0-9]+ \|" | sed 's/^ *[0-9]* |//; s/|$//' > "$TMP/rtl.txt"
 
 nref=$(wc -l < "$TMP/ref.txt"); nrtl=$(wc -l < "$TMP/rtl.txt")

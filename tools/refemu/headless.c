@@ -228,6 +228,22 @@ static BOOL HL_Shot(const char *dir,const char *prefix,int frame,const unsigned 
 //  Hexdump the Studio 2 RAM window: $0800-$08FF is program/system RAM, $0900-$09FF the display memory
 //  the BIOS streams out over DMA.  Compare against the verilator sim's --vram.
 
+//  The 64 CDP1864 colour cells, laid out as they appear on screen: 8 columns
+//  across by 8 row-groups down, each cell covering 8 pixels by 4 logical rows.
+//  Printed in the 1864's own pin order (bit0 red, bit1 blue, bit2 green) so it can
+//  be compared against the RTL's colour_ram without a permutation in the way.
+static void HL_DumpColour(int frame)
+{
+    int g,c;
+    printf("--- frame %d: colour RAM (row group x column), 1864 pin order ---\n",frame);
+    for (g = 0;g < 8;g++)
+    {
+        printf("  g%d:",g);
+        for (c = 0;c < 8;c++) printf(" %d",CPU_GetColourCell((BYTE8)(g*8+c)));
+        printf("\n");
+    }
+}
+
 static void HL_DumpVram(int frame)
 {
     int a,i;
@@ -444,6 +460,7 @@ static void HL_Usage(const char *argv0)
 "                    CDP1864 colour machine: PAL 312-line frame, 192 display\n"
 "                    lines (rows shown 6x), colour RAM at $B00, background on\n"
 "                    OUT 1, display off on INP 4\n"
+"  --colour          dump the 64 CDP1864 colour cells at each shot frame\n"
 "  --bios FILE       system ROM at $0000, replacing the embedded Studio II BIOS\n"
 "                    (needed for mpt02: studio3_ntsc.bin / victory.rom)\n"
 "  --frames N        stop after N frames (default 300)\n"
@@ -486,6 +503,7 @@ int main(int argc,char *argv[])
     BYTE8 machine = MACHINE_STUDIO2;
     const char *bios = NULL;
     BOOL last = FALSE,ascii = FALSE,frameLog = FALSE,quiet = FALSE,vram = FALSE;
+    BOOL colourDump = FALSE;
     int i,frame = 0,captured = 0,traceFrom = 0;
     long traceCpu = 0;
     unsigned long instructions = 0;
@@ -512,6 +530,7 @@ int main(int argc,char *argv[])
         {
             if (!HL_AddPress(argv[++i])) return 1;
         }
+        else if (strcmp(argv[i],"--colour") == 0)                colourDump = TRUE;
         else if (strcmp(argv[i],"--bios") == 0 && i+1 < argc)   bios = argv[++i];
         else if (strcmp(argv[i],"--machine") == 0 && i+1 < argc)
         {
@@ -594,6 +613,7 @@ int main(int argc,char *argv[])
                 if (HL_Shot(outdir,prefix,frame,pix,scale)) captured++;
                 if (ascii) HL_Ascii(pix);
                 if (vram)  HL_DumpVram(frame);
+            if (colourDump) HL_DumpColour(frame);
             }
         }
     }

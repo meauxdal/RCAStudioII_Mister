@@ -206,40 +206,32 @@ assign BUTTONS = 0;
 
 `include "build_id.v"
 localparam CONF_STR = {
-	"RCA-StudioII;v3;",
-	"-;",
+	"RCA-StudioII;v5;",
 	"F1,ST2BINROM,Load Cartridge;",
+	"-;",
+	// Must load valid firmware after switching machine. The two Studio IIIs are
+	// different chipsets, not one part with two sets of timings: PAL is a CDP1864,
+	// NTSC is a CDP1861 with a CDP1862 for colour and a CDP1863 for tone.
+	"O[14:13],Machine,Studio II,Studio III PAL,Studio III NTSC,Visicom;",
 	"F0,BINROM,Load Firmware;",
 	"-;",
-	// Mapping picks who owns the Joystick row below it. On Auto the core drives
-	// that row: it writes the profile it detected back into the menu through
-	// hps_io's status_set, so loading Gunfighter leaves the menu reading
-	// "Gunfighter" instead of "Auto". Switch to Manual and the row keeps
-	// whatever it is showing and becomes yours to change -- so Manual always
-	// starts from the detected profile rather than from a stale one.
 	"O[6],Mapping,Auto,Manual;",
-	// Value 0 is MAP_NONE, which still passes Start through; Clear-only (11) is the
-	// one that silences the pad completely. 
-	// Order must match the localparams in rtl/rcastudioii.sv -- the row's value
-	// IS the profile number.
-	"D2O[5:2],Joystick,None,Cross,Space War,Freeway,Bowling,Baseball,Homebrew,Gunfighter,8-way,Doodles,2P Homebrew,Clear-only,Paddle;",
+	// Order must match the localparams in rtl/rcastudioii.sv
+	"D2O[5:2],Joystick,None,Cross,Space War,Freeway,Bowling,Baseball,Homebrew,Gunfighter,8-way,Doodle,2P Homebrew,Clear-only,Paddle;",
 	"O[8:7],Players,Auto,1,2;",
 	"O[10:9],Stick Keypad,Off,Pad A,Pad B;",
 	"-;",
 	"O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	"O[12:11],Scale,Normal,V-Integer,Narrower HV-Integer,Wider HV-Integer;",
 	"-;",
-//	"T[0],Reset;",
 	"T[1],Clear;",
 	"R[0],Reset and close OSD;",
-	// Non-OSD entries (J/jn/V) must sit below every menu row: the menu's selection
-	// pass counts any entry starting >= 'A' (Main menu.cpp), but its drawing pass
-	// skips J -- a J placed mid-string shifts every row after it off by one.
-	// A0..B9 are direct per-key bindings (see rtl/rcastudioii.sv); jn gives
-	// defaults to the first three only, so the direct keys stay unbound until
-	// the user maps them deliberately.
+	// Non-OSD entries (J/jn/V) must sit below every menu row; a J placed mid-string shifts 
+	// every row after it off by one.
 	// Fire/Extra mirror the MPT-02 joystick: fire on 5, a second button on 0.
-	"J1,Fire,Extra,Start,Select,A0,A1,A2,A3,A4,A5,A6,A7,A8,A9,B0,B1,B2,B3,B4,B5,B6,B7,B8,B9;",
+	"J1,Fire,Extra,Start,Clear,A0,A1,A2,A3,A4,A5,A6,A7,A8,A9,B0,B1,B2,B3,B4,B5,B6,B7,B8,B9;",
+	// A0..B9 are direct per-key bindings (see rtl/rcastudioii.sv); jn gives
+	// defaults to the first three only.
 	"jn,A,B,Start,Select;",
 	"V,v",`BUILD_DATE
 };
@@ -258,8 +250,9 @@ wire  [15:0] joystick_l_analog_1, joystick_r_analog_1;
 
 // CLEAR is the Studio II's console button. It resets the CPU and blanks/clears
 // the display, but the Pixie's timing generator is kept running in order to be
-// friendlier to display sync. Mapped to F3 (0x04), the OSD "Clear" button, and
-// gamepad Select.
+// friendlier to display sync. 
+// TODO: Ensure this "hack" does not compromise accuracy. ~elle
+// Mapped to F3 (0x04), the OSD "Clear" button, and the gamepad (as Clear).
 reg clear_key = 1'b0;
 always @(posedge clk_sys) begin
 	reg old_stb;
@@ -318,6 +311,8 @@ pll pll
 
 // The CDP1861 emits one pixel per CPU clock: 1.7897725 MHz nominal, 1.760229 MHz
 // here (clk_sys/4, and the real Studio II's RC oscillator was tuned by eye anyway).
+// TODO: We should still consider the feasibility of hitting true nominal. We are
+// further off than I'd like. ~elle
 reg [1:0] ce_cnt = 2'd0;
 always @(posedge clk_sys) ce_cnt <= ce_cnt + 2'd1;
 wire ce_pix = (ce_cnt == 2'd0);
@@ -348,6 +343,8 @@ wire HSync;
 wire VBlank;
 wire VSync;
 wire [2:0] video;   // {R,G,B} from the core
+wire       video_bg;    // ...at background luminance (CDP1864 BCKGND)
+wire [1:0] vis_index;   // Visicom: one of its four fixed colours
 
 rcastudioii rcastudio
 (
@@ -369,10 +366,13 @@ rcastudioii rcastudio
 	.VSync(VSync),
 	.video_de(),
 	.video(video),
+	.vis_index(vis_index),
 	.audio(audio),
 	.joystick_0(joystick_0),
 	.joystick_1(joystick_1),
 	.joy_override(status[5:2]),
+	.machine(status[14:13]),
+	.video_bg(video_bg),
 	.joy_manual(status[6]),
 	.auto_profile(auto_profile),
 	.players(status[8:7]),
@@ -448,9 +448,43 @@ assign CLK_VIDEO = clk_sys;
 // colour pins. The Studio II's 1861 is monochrome and drives all three together,
 // so this is still white on black -- expanding each bit to full 8-bit scale
 // gives byte-identical output to the old `video ? 8'hFF : 8'h00`.
-wire [7:0] vid_r = {8{video[2]}};
-wire [7:0] vid_g = {8{video[1]}};
-wire [7:0] vid_b = {8{video[0]}};
+// BCKGND lowers the luminance of background pixels, so one colour can serve as
+// both background and data -- what the datasheet describes and what Emma 02's
+// palette shows (back_blue 0,0,128 against blue 0,0,255). Half scale here.
+wire [7:0] vid_lvl = video_bg ? 8'h80 : 8'hFF;
+
+// The Visicom is the exception: its four colours are fixed values chosen by
+// Toshiba, not combinations of three colour pins, so they cannot be expressed
+// on the {R,G,B} bus above.
+//
+// Emma 02 and MAME disagree on what those values are, and a real machine settles
+// it. refvideo/"Freeway [Toshiba Visicom COM-100 Longplay] (1978).mp4" is a
+// hardware capture of the built-in Freeway; sampling its four colours gives
+// #003700, #B1ECE6, #DCE12D and #FF3D46. Summed RGB distance from that:
+//
+//              Emma 02   MAME        (MAME's visicom.cpp VISICOM_PALETTE)
+//   colour 1      75       13        #70D0FF vs #AFDFE4 -- Emma's leans blue,
+//   colour 2      74       45           the hardware is a pale green-cyan
+//   colour 3      66       18        #FF7070 vs #EF454A -- Emma's is pink
+//   total        225       86
+//
+// So these are MAME's. The capture is a composite NTSC encode and its absolute
+// levels are not trustworthy, but the *hue* of colour 1 is not a capture
+// artefact: green-cyan and blue-cyan are not the same colour.
+wire machine_visicom = (status[14:13] == 2'd3);
+reg [23:0] vis_rgb;
+always @(*) begin
+	case (vis_index)
+		2'd0:    vis_rgb = 24'h004000;
+		2'd1:    vis_rgb = 24'hAFDFE4;
+		2'd2:    vis_rgb = 24'hB9C42F;
+		default: vis_rgb = 24'hEF454A;
+	endcase
+end
+
+wire [7:0] vid_r = machine_visicom ? vis_rgb[23:16] : (video[2] ? vid_lvl : 8'h00);
+wire [7:0] vid_g = machine_visicom ? vis_rgb[15:8]  : (video[1] ? vid_lvl : 8'h00);
+wire [7:0] vid_b = machine_visicom ? vis_rgb[7:0]   : (video[0] ? vid_lvl : 8'h00);
 
 ////////////////// On-screen keypad (Jaguar core's numstick, via ColecoAdam) //
 //
