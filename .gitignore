@@ -80,3 +80,4 @@ tools/refemu/studio2_headless
 tools/refemu/studio2
 tools/refemu/*.o
 tools/refemu/out/
+/ignore
