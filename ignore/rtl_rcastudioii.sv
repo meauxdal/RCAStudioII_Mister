@@ -48,6 +48,8 @@ module rcastudioii
 	//    0  Studio II          CDP1861, NTSC, monochrome
 	//    1  Studio III PAL     CDP1864 -- video, colour and tone in one part
 	//    2  Studio III NTSC    CDP1861 + CDP1862 colour + CDP1863 tone
+	//  The two Studio IIIs are different chipsets, not one part with two sets of
+	//  timings -- see docs/succession-plan.md §9.
 	input        [1:0] machine,
 
 	output reg         HBlank,
