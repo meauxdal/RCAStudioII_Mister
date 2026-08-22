@@ -284,7 +284,9 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 	.buttons(buttons),
 	.status(status),
 	.status_in(status_in),
-	.status_set(status_set),
+    // Tied low (mind write timing here; too late and it looks like 
+	// settings don't save)
+	.status_set(1'b0), //.status_set(status_set),
 	.status_menumask(status_menumask),
 
 	.ps2_key(ps2_key),
@@ -321,7 +323,7 @@ wire ce_pix = (ce_cnt == 2'd0);
 wire joy_clear = joystick_0[7] | joystick_1[7];
 wire clear_request = status[1] | clear_key | joy_clear;
 
-wire reset = RESET | status[0] | clear_request | buttons[1] | ioctl_download | download_reset | ~rom_loaded;
+wire reset = RESET | status[0] | clear_request | buttons[1] | ioctl_download | download_reset | ~rom_loaded | apply_reset;
 
 // reset after download
 reg [7:0] download_reset_cnt;
@@ -334,8 +336,6 @@ always @(posedge CLK_50M) begin
 end
 
 reg rom_loaded = 0;
-
-//////////////////////////////////////////////////////////////////
 
 ////////////////// Machine select: staged, applied on request ////////////////
 //
@@ -369,6 +369,8 @@ always @(posedge clk_sys) begin
 	apply_reset_d <= apply_reset;
 	if (apply_reset && !apply_reset_d) machine_active <= status[14:13];
 end
+
+//////////////////////////////////////////////////////////////////
 
 wire HBlank;
 wire HSync;
@@ -503,7 +505,7 @@ wire [7:0] vid_lvl = video_bg ? 8'h80 : 8'hFF;
 // So these are MAME's. The capture is a composite NTSC encode and its absolute
 // levels are not trustworthy, but the *hue* of colour 1 is not a capture
 // artefact: green-cyan and blue-cyan are not the same colour.
-wire machine_visicom = (status[14:13] == 2'd3);
+wire machine_visicom = (machine_active == 2'd3);
 reg [23:0] vis_rgb;
 always @(*) begin
 	case (vis_index)
@@ -605,22 +607,24 @@ video_mixer #(.LINE_LENGTH(140), .GAMMA(1)) video_mixer
 );
 
 wire [1:0] ar = status[122:121];
+wire       is_pal = (machine_active == 2'd1);
+
 video_freak video_freak
 (
-	.CLK_VIDEO(CLK_VIDEO),
-	.CE_PIXEL(CE_PIXEL),
-	.VGA_VS(VGA_VS),
-	.HDMI_WIDTH(HDMI_WIDTH),
-	.HDMI_HEIGHT(HDMI_HEIGHT),
-	.VGA_DE(VGA_DE),
-	.VIDEO_ARX(VIDEO_ARX),
-	.VIDEO_ARY(VIDEO_ARY),
-	.VGA_DE_IN(vga_de),
-	.ARX((!ar) ? 12'd4 : (ar - 1'd1)),
-	.ARY((!ar) ? 12'd3 : 12'd0),
+    .CLK_VIDEO(CLK_VIDEO),
+    .CE_PIXEL(CE_PIXEL),
+    .VGA_VS(VGA_VS),
+    .HDMI_WIDTH(HDMI_WIDTH),
+    .HDMI_HEIGHT(HDMI_HEIGHT),
+    .VGA_DE(VGA_DE),
+    .VIDEO_ARX(VIDEO_ARX),
+    .VIDEO_ARY(VIDEO_ARY),
+    .VGA_DE_IN(vga_de),
+    .ARX((!ar) ? 12'd4 : (ar - 1'd1)),
+    .ARY((!ar) ? 12'd3 : 12'd0),
 	.CROP_SIZE(12'd0),
 	.CROP_OFF(5'd0),
-	.SCALE({1'b0, status[12:11]})
+    .SCALE({1'b0, status[12:11]})
 );
 
 //reg  [26:0] act_cnt;
