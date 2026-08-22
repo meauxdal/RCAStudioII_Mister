@@ -48,6 +48,7 @@ module rcastudioii
 	//    0  Studio II          CDP1861, NTSC, monochrome
 	//    1  Studio III PAL     CDP1864 -- video, colour and tone in one part
 	//    2  Studio III NTSC    CDP1861 + CDP1862 colour + CDP1863 tone
+	//    3  Visicom		    CDP1861, NTSC, colour from second RAM plane
 	input        [1:0] machine,
 
 	output reg         HBlank,
@@ -61,16 +62,9 @@ module rcastudioii
 	output reg         bitmap_de,
 	// {R,G,B}, one bit per channel -- this mirrors the hardware rather than
 	// inventing a format. The CDP1864 in the successor machines has exactly one
-	// RDATA, GDATA and BDATA pin, fed from colour RAM, which is what gives it
-	// "1-of-8 dot colours" (datasheet, docs/succession-plan.md §6). The CDP1861
+	// RDATA, GDATA and BDATA pin, fed from colour RAM. The CDP1861
 	// here is a mono part, so the Studio II drives all three together and the
-	// picture is unchanged; the width exists so the 1864 has somewhere to put
-	// colour without touching every module above.
-	//
-	// Not modelled yet: the 1864's BCKGND output, which lowers the luminance of
-	// background colours so the same colour can be used for background and data.
-	// That needs a fourth bit, and it belongs with the 1864 itself rather than
-	// being guessed at here.
+	// picture is unchanged.
 	output       [2:0] video,
 	// Visicom only: which of its four colours this pixel is. The palette is
 	// four fixed RGB values that a 1-bit-per-channel bus cannot carry, so the
@@ -83,6 +77,7 @@ module rcastudioii
 	output reg         video_bg,
 	output             audio
 );
+
 
 //  Derived from `machine`. Most of the machine-dependent behaviour keys off
 //  "is this a Studio III" (the memory map, colour RAM, the tone generator)
@@ -288,9 +283,7 @@ end
 
 ////////////////// KEYPAD //////////////////////////////////////////////////////////////////
 
-//The CPU selects the key to scan with OUT 2, latched into a CD4515. "io_n[1] && io_out" was a bit
-//test, so it also latched on OUT 3, OUT 6 and OUT 7; it must be an equality test on N == 2. The
-//assignment was blocking inside a clocked block, too.
+//The CPU selects the key to scan with OUT 2, latched into a CD4515.
 reg  [3:0] keylatch = 4'h0;
 always @(posedge clk_sys) if(io_out && (io_n == 3'd2)) keylatch <= cpu_dout[3:0];
 
@@ -1318,13 +1311,7 @@ assign audio = is_studio3 ? aud_tone : snd_out;
 // from the table at header offsets 64-127 (docs/cartridge.txt).
 //
 // The format is detected purely from the "RCA2" magic in the first four bytes.
-// The OSD extension index (ioctl_index[7:6]) is deliberately NOT used: a valid
-// .st2 always carries the magic, so the extension adds nothing, and going on the
-// magic alone means a mis-named or mis-picked file still loads correctly. The
-// CONF_STR entry "F1,ST2BINROM" exists so the file browser offers all three.
-//
-// Reference implementation, verified against 46 cartridges:
-// refs/rca-studio2/studio2-games/studio2/cpu.c  CPU_LoadST2Image().
+// The OSD extension index (ioctl_index[7:6]) is deliberately not used.
 
 wire        bios_dl = ioctl_download && (ioctl_index[5:0] == 6'd0);
 wire        cart_dl = ioctl_download && (ioctl_index[5:0] == 6'd1);

@@ -206,14 +206,13 @@ assign BUTTONS = 0;
 
 `include "build_id.v"
 localparam CONF_STR = {
-	"RCA-StudioII;v5;",
+	"RCA-StudioII;v6;",
 	"F1,ST2BINROM,Load Cartridge;",
-	"-;",
-	// Must load valid firmware after switching machine. The two Studio IIIs are
-	// different chipsets, not one part with two sets of timings: PAL is a CDP1864,
-	// NTSC is a CDP1861 with a CDP1862 for colour and a CDP1863 for tone.
-	"O[14:13],Machine,Studio II,Studio III PAL,Studio III NTSC,Visicom;",
 	"F0,BINROM,Load Firmware;",
+	"-;",
+	// Machine is staged; nothing changes until Apply is pressed
+	"O[14:13],Machine,Studio II,Studio III PAL,Studio III NTSC,Visicom;",
+	"R[15],Apply and reset;",
 	"-;",
 	"O[6],Mapping,Auto,Manual;",
 	// Order must match the localparams in rtl/rcastudioii.sv
@@ -338,6 +337,39 @@ reg rom_loaded = 0;
 
 //////////////////////////////////////////////////////////////////
 
+////////////////// Machine select: staged, applied on request ////////////////
+//
+// status[14:13] (the OSD "Machine" row) is only the operator's pending
+// pick here -- fed nowhere else in this block. "Apply" is R[15], status
+// bit 15. R[15] is a
+// momentary status bit like R[0] ("Reset and close OSD"), so a plain
+// CLK_50M edge-detect + hold, same shape as download_reset_cnt above, both
+// stretches it long enough to certainly register in clk_sys (which the PLL
+// derives from CLK_50M with no fixed phase relationship, so a single
+// CLK_50M-wide pulse is not safe to sample directly over there) and gives
+// the reset itself the same duration a download's reset gets.
+reg [7:0] apply_reset_cnt;
+wire      apply_reset = apply_reset_cnt != 0;
+always @(posedge CLK_50M) begin
+	reg apply_d;
+	apply_d <= status[15];
+	if (status[15] && !apply_d) apply_reset_cnt <= 8'd255;
+	else if (apply_reset_cnt != 0) apply_reset_cnt <= apply_reset_cnt - 8'd1;
+end
+
+// Latched on apply_reset's rising edge in the clk_sys domain -- safe to
+// edge-detect because apply_reset is already stretched to 255 CLK_50M
+// cycles, comfortably wider than one clk_sys period. This register, not
+// status[14:13], is what actually reaches the core and the Visicom palette
+// mux below, so nothing about the memory map, video chipset or colour RAM
+// reconfigures until the operator asks for it.
+reg [1:0] machine_active = 2'd0;
+always @(posedge clk_sys) begin
+	reg apply_reset_d;
+	apply_reset_d <= apply_reset;
+	if (apply_reset && !apply_reset_d) machine_active <= status[14:13];
+end
+
 wire HBlank;
 wire HSync;
 wire VBlank;
@@ -371,7 +403,7 @@ rcastudioii rcastudio
 	.joystick_0(joystick_0),
 	.joystick_1(joystick_1),
 	.joy_override(status[5:2]),
-	.machine(status[14:13]),
+	.machine(machine_active),
 	.video_bg(video_bg),
 	.joy_manual(status[6]),
 	.auto_profile(auto_profile),
