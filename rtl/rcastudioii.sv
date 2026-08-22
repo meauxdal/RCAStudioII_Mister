@@ -44,15 +44,12 @@ module rcastudioii
 	input        [9:0] osk_b,          // and for keypad B
 	input  reg         ce_pix,
 	input              clear_key,      // CLEAR button input from top-level; keep video alive during CLEAR
-<<<<<<< Updated upstream
-=======
 	//  Which machine, from the OSD:
 	//    0  Studio II          CDP1861, NTSC, monochrome
 	//    1  Studio III PAL     CDP1864 -- video, colour and tone in one part
 	//    2  Studio III NTSC    CDP1861 + CDP1862 colour + CDP1863 tone
 	//    3  Visicom
 	input        [1:0] machine,
->>>>>>> Stashed changes
 
 	output reg         HBlank,
 	output reg         HSync,
@@ -968,12 +965,6 @@ wire  [7:0]  ram_q;  // data returned to the CPU (and to the 1861 during DMA)
 reg  [7:0]  cart_page = 8'h00;    // indexed by address bits [10:8]: page $08..$0F
 
 wire        bank0    = (ram_a[15:12] == 4'h0);
-<<<<<<< Updated upstream
-wire        rom_sel  = bank0 && !ram_a[11];                        // $0000-$07FF
-wire        cart_sel = bank0 &&  ram_a[11] && cart_page[ram_a[10:8]];
-wire        ram_sel  = !rom_sel && !cart_sel && !ram_a[9];         // the A9 = 0 mirror
-wire        cpu_wr   = ram_wr && ram_sel;                          // RAM is the only writeable thing
-=======
 wire        rom_sel  = bank0 && (!ram_a[11] || machine_visicom);   // $0000-$07FF ($0000-$0FFF on the Visicom)
 // The CDP1864 machines put a second ROM region at $0C00-$0FFF -- MAME's
 // mpt02_map has .rom() there as well as at $0000-$07FF, and the Studio III BIOS
@@ -1046,7 +1037,6 @@ wire [2:0]  colour_cell = colour_ram[col_index];
 // gdata_r() = BIT(m_color,2), i.e. bit0 red, bit1 blue, bit2 green. Permute into
 // the {R,G,B} the video bus carries.
 wire [2:0]  colour_dot = {colour_cell[0], colour_cell[2], colour_cell[1]};
->>>>>>> Stashed changes
 
 // Both arrays have one cycle of latency, so the read mux select has to be
 // delayed with the data. The CPU holds an address for a whole machine cycle
@@ -1060,22 +1050,10 @@ always @(posedge clk_sys) begin
 end
 // Open bus reads back as $FF, matching MAME's unmap_value_high and the likely
 // floating-bus behaviour of the real machine (nothing drives the lines, and
-<<<<<<< Updated upstream
-// the last DMA-driven byte was usually high). This was $00 to match the C
-// reference emulator's flat array, but Robson's Hockey and Combat flash the
-// screen through the BIOS scroll register with a base that walks the display
-// DMA past $09FF into this window: with $00 those frames rendered as a black
-// screen with an 8-pixel bar (the reported "flashing strobes"); with $FF they
-// render as the full-screen white flash MAME shows. Nothing in the §9 corpus
-// reads undecoded space (tools/memdecode-test.sh covers it instead), so the
-// frame comparison is unaffected.
-assign ram_q = ram_sel_q ? sram_q : (rom_sel_q ? rom_q : 8'hFF);
-=======
 // the last DMA-driven byte was usually high). 
 assign ram_q = pl1_sel_q ? pl1_q
              : ram_sel_q ? sram_q
              : rom_sel_q ? rom_q : 8'hFF;
->>>>>>> Stashed changes
 
 
 ////////////////// SOUND ////////////////////////////////////////////////////
@@ -1245,9 +1223,6 @@ dpram #(8, 12) rom0
 	.q_b()
 );
 
-<<<<<<< Updated upstream
-// The 512 bytes of RAM: $0800-$08FF program/system, $0900-$09FF display.
-=======
 dpram #(8, 12) rom1
 (
 	.clock(clk_sys),
@@ -1302,7 +1277,6 @@ assign rom_q = (machine == 2'd0) ? rom0_q :
 // The RAM: 512 bytes ($0800-$08FF program/system, $0900-$09FF display on the
 // Studio II and III; $1000-$11FF on the Visicom, whose bit plane 0 is its top
 // half). The Visicom's plane 1 is the separate 256-byte array below.
->>>>>>> Stashed changes
 // Selected by A9 = 0, so the address inside it is just A8-A0.
 // Add a port-B writer used to clear VRAM on CLEAR without resetting the Pixie
 reg [8:0] clear_addr_b = 9'd0;
