@@ -47,11 +47,16 @@ module emu
 	output        VGA_DE,    // = ~(VBlank | HBlank)
 	output        VGA_F1,
 	output [1:0]  VGA_SL,
-	output        VGA_SCALER, // Force VGA scaler
+	output        VGA_SCALER,  // Force VGA scaler
+	output        VGA_DISABLE,
 
 	input  [11:0] HDMI_WIDTH,
 	input  [11:0] HDMI_HEIGHT,
 	output        HDMI_FREEZE,
+	output        HDMI_BLACKOUT,
+	output        HDMI_BOB_DEINT,
+
+
 
 `ifdef MISTER_FB
 	// Use framebuffer in DDRAM (USE_FB=1 in qsf)
@@ -181,7 +186,10 @@ assign {DDRAM_CLK, DDRAM_BURSTCNT, DDRAM_ADDR, DDRAM_DIN, DDRAM_BE, DDRAM_RD, DD
 assign VGA_SL = 0;
 assign VGA_F1 = 0;
 assign VGA_SCALER = 0;
+assign VGA_DISABLE = 0;
 assign HDMI_FREEZE = 0;
+assign HDMI_BLACKOUT = 0;
+assign HDMI_BOB_DEINT = 0;
 
 // Beeper: a square wave gated by the 1802's Q line, generated in rcastudioii.sv.
 wire audio;
@@ -207,31 +215,22 @@ localparam CONF_STR = {
 	"R[15],Apply and reset;",
 	"-;",
 	"O[6],Mapping,Auto,Manual;",
-	// Value 0 is MAP_NONE, which still passes Start through; Clear-only (11) is the
-	// one that silences the pad completely. Paddle (12) is a single-player,
-	// keypad-B-only profile for the homebrew tennis.st2, distinct from retail
-	// Tennis/Squash's CROSS profile.
-	// Order must match the localparams in rtl/rcastudioii.sv -- the row's value
-	// IS the profile number.
-	"D2O[5:2],Joystick,None,Cross,Space War,Freeway,Bowling,Baseball,Homebrew,Gunfighter,8-way,Doodles,2P Homebrew,Clear-only,Paddle;",
+	// Order must match the localparams in rtl/rcastudioii.sv
+	"D2O[5:2],Joystick,None,Cross,Space War,Freeway,Bowling,Baseball,Homebrew,Gunfighter,8-way,Doodle,2P Homebrew,Clear-only,Paddle;",
 	"O[8:7],Players,Auto,1,2;",
 	"O[10:9],Stick Keypad,Off,Pad A,Pad B;",
 	"-;",
 	"O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	"O[12:11],Scale,Normal,V-Integer,Narrower HV-Integer,Wider HV-Integer;",
 	"-;",
-//	"T[0],Reset;",
 	"T[1],Clear;",
 	"R[0],Reset and close OSD;",
-	// Non-OSD entries (J/jn/V) must sit below every menu row: the menu's selection
-	// pass counts any entry starting >= 'A' (Main menu.cpp), but its drawing pass
-	// skips J -- a J placed mid-string shifts every row after it off by one.
+	// Non-OSD entries (J/jn/V) must sit below every menu row; a J placed mid-string shifts
+	// every row after it off by one.
+	// Fire/Extra mirror the MPT-02 joystick: fire on 5, a second button on 0.
+	"J1,Fire,Extra,Start,Clear,A0,A1,A2,A3,A4,A5,A6,A7,A8,A9,B0,B1,B2,B3,B4,B5,B6,B7,B8,B9;",
 	// A0..B9 are direct per-key bindings (see rtl/rcastudioii.sv); jn gives
-	// defaults to the first three only, so the direct keys stay unbound until
-	// the user maps them deliberately.
-	// Fire/Extra mirror the MPT-02 joystick, the closest thing to an official
-	// Studio II controller: fire on 5, a second button on 0.
-	"J1,Fire,Extra,Start,Select,A0,A1,A2,A3,A4,A5,A6,A7,A8,A9,B0,B1,B2,B3,B4,B5,B6,B7,B8,B9;",
+	// defaults to the first three only.
 	"jn,A,B,Start,Select;",
 	"V,v",`BUILD_DATE
 };
@@ -249,9 +248,10 @@ wire  [15:0] joystick_l_analog_0, joystick_r_analog_0;
 wire  [15:0] joystick_l_analog_1, joystick_r_analog_1;
 
 // CLEAR is the Studio II's console button. It resets the CPU and blanks/clears
-// the display, but the Pixie's timing generator must keep running or HDMI/analog
-// displays can lose sync. Mapped to F3 (0x04), the OSD "Clear" button, and
-// gamepad Select.
+// the display, but the Pixie's timing generator is kept running in order to be
+// friendlier to display sync.
+// TODO: Ensure this "hack" does not compromise accuracy. ~elle
+// Mapped to F3 (0x04), the OSD "Clear" button, and the gamepad (as Clear).
 reg clear_key = 1'b0;
 always @(posedge clk_sys) begin
 	reg old_stb;
@@ -314,6 +314,8 @@ pll pll
 
 // The CDP1861 emits one pixel per CPU clock: 1.7897725 MHz nominal, 1.760229 MHz
 // here (clk_sys/4, and the real Studio II's RC oscillator was tuned by eye anyway).
+// TODO: We should still consider the feasibility of hitting true nominal. We are
+// further off than I'd like. ~elle
 reg [1:0] ce_cnt = 2'd0;
 always @(posedge clk_sys) ce_cnt <= ce_cnt + 2'd1;
 wire ce_pix = (ce_cnt == 2'd0);
@@ -377,6 +379,8 @@ wire HSync;
 wire VBlank;
 wire VSync;
 wire [2:0] video;   // {R,G,B} from the core
+wire       video_bg;    // ...at background luminance (CDP1864 BCKGND)
+wire [1:0] vis_index;   // Visicom: one of its four fixed colours
 
 rcastudioii rcastudio
 (
@@ -398,6 +402,7 @@ rcastudioii rcastudio
 	.VSync(VSync),
 	.video_de(),
 	.video(video),
+	.vis_index(vis_index),
 	.audio(audio),
 	.joystick_0(joystick_0),
 	.joystick_1(joystick_1),
@@ -474,8 +479,6 @@ end
 assign status_menumask = (!status[6]) ? 16'h0004 : 16'h0000;
 
 assign CLK_VIDEO = clk_sys;
-// Commented to avoid assigning CE_PIXEL to more than one value
-// assign CE_PIXEL   = 1'b1; // 7.04 MHz pixel clock enable (4x pixel repeating)
 
 // The core hands up {R,G,B}, one bit per channel, mirroring the CDP1864's three
 // colour pins. The Studio II's 1861 is monochrome and drives all three together,
@@ -536,25 +539,22 @@ wire [15:0] osk_r = osk_use_j1 ? joystick_r_analog_1 : joystick_r_analog_0;
 wire [11:0] osk_press;
 wire  [7:0] osk_vr, osk_vg, osk_vb;
 
-// Generate a 2x pixel clock enable (3.52 MHz) for horizontal stretching
-wire ce_pix_2x = !ce_cnt[0]; 
-
 numstick #(
-	.HOLD_CYCLES     (3520000),   
-	.PRESS_CYCLES    (528000),    
-	.RECENTER_CYCLES (141000),    
-	.DEFAULT_ACTIVE_W(128),       // 64 * 2
+	.HOLD_CYCLES     (3520000),   // ~0.5s  @ 7.04MHz
+	.PRESS_CYCLES    (528000),    // ~75ms
+	.RECENTER_CYCLES (141000),    // ~20ms
+	.DEFAULT_ACTIVE_W(64),
 	.DEFAULT_ACTIVE_H(128),
-	.CELL_W          (36),        // 18 * 2
+	.CELL_W          (18),
 	.CELL_H          (12),
-	.CELL_GAP        (2),         // 1 * 2
-	.BOX_PAD         (4),         // 2 * 2
-	.STACK_GAP       (8),         // 4 * 2
-	.BORDER_THICKNESS(2)          // 1 * 2
+	.CELL_GAP        (1),
+	.BOX_PAD         (2),
+	.STACK_GAP       (4),
+	.BORDER_THICKNESS(1)
 ) numstick
 (
 	.clk_sys  (clk_sys),
-	.ce_pix   (ce_pix_2x),        // Feed 2x clock enable here
+	.ce_pix   (ce_pix),
 	.reset    (reset),
 	.enable   (osk_mode != 2'd0),
 	.hblank   (HBlank),
@@ -577,14 +577,17 @@ wire [9:0] osk_keys = {osk_press[8:0], osk_press[9]};
 wire [9:0] osk_a = (osk_mode == 2'd1) ? osk_keys : 10'd0;
 wire [9:0] osk_b = (osk_mode == 2'd2) ? osk_keys : 10'd0;
 
+// video_mixer gives analog outputs a scandoubler (15.7kHz native -> 31kHz when
+// forced) and the OSD gamma control; video_freak provides aspect ratio and the
+// integer scaling modes on top of the HDMI scaler.
 wire       vga_de;
 wire       freeze_sync;
 
-video_mixer #(.LINE_LENGTH(280), .GAMMA(1)) video_mixer // 140 * 2
+video_mixer #(.LINE_LENGTH(140), .GAMMA(1)) video_mixer
 (
 	.CLK_VIDEO(CLK_VIDEO),
 	.CE_PIXEL(CE_PIXEL),
-	.ce_pix(ce_pix_2x),         // Feed 2x clock enable here
+	.ce_pix(ce_pix),
 	.scandoubler(forced_scandoubler),
 	.hq2x(1'b0),
 	.gamma_bus(gamma_bus),
@@ -618,6 +621,9 @@ always @(*) begin
 	endcase
 end
 
+// not currently used
+// wire       is_pal = (machine_active == 2'd1);
+
 video_freak video_freak
 (
     .CLK_VIDEO(CLK_VIDEO),
@@ -636,6 +642,9 @@ video_freak video_freak
     .SCALE({1'b0, status[12:11]})
 );
 
-assign LED_USER = 1'b0;
+//reg  [26:0] act_cnt;
+//always @(posedge clk_sys) act_cnt <= act_cnt + 1'd1;
+//assign LED_USER = act_cnt[26] ? act_cnt[25:18] > act_cnt[7:0] : act_cnt[25:18] <= act_cnt[7:0];
+assign LED_USER = 1'b0;   // was undriven
 
 endmodule
