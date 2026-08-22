@@ -476,7 +476,22 @@ end
 // bit of the Joystick O[5:2] option.
 assign status_menumask = (!status[6]) ? 16'h0004 : 16'h0000;
 
-assign CLK_VIDEO = clk_sys;
+// The scaler needs more to work with than the native raster: 88 active pixels
+// at a 1.76 MHz CE_PIXEL asks it for a ~14x horizontal blow-up, and that is
+// what broke the Scale modes (anything but Original lost sync). So the video
+// chain runs on the PLL's 42.24 MHz output -- exactly 6x clk_sys, same VCO, so
+// the domains are phase-locked and the /6 enable below lands on a fixed phase
+// -- and samples the core's pixel stream at 7.04 MHz. Each 1861 pixel is
+// thereby repeated 4x: the line becomes 352 wide, the scaler does ~3.5x, and
+// the scandoubler keeps the 4x enable headroom video_mixer's header asks for.
+assign CLK_VIDEO = clk_vid;
+
+reg  [2:0] ce_vid_cnt = 3'd0;
+reg        ce_pix_vid = 1'b0;
+always @(posedge clk_vid) begin
+	ce_vid_cnt <= (ce_vid_cnt == 3'd5) ? 3'd0 : ce_vid_cnt + 3'd1;
+	ce_pix_vid <= (ce_vid_cnt == 3'd5);
+end
 
 // The core hands up {R,G,B}, one bit per channel, mirroring the CDP1864's three
 // colour pins. The Studio II's 1861 is monochrome and drives all three together,
@@ -581,21 +596,38 @@ wire [9:0] osk_b = (osk_mode == 2'd2) ? osk_keys : 10'd0;
 wire       vga_de;
 wire       freeze_sync;
 
-video_mixer #(.LINE_LENGTH(140), .GAMMA(1)) video_mixer
+// Resample the clk_sys-domain pixel stream (numstick overlay included) into
+// the clk_vid domain. Plain registers: the clocks share a PLL, so this is an
+// ordinary timed path, and sampling at 42 MHz then presenting on the 7.04 MHz
+// enable repeats each source pixel 4x. LINE_LENGTH follows the active width,
+// 88 -> 352.
+reg [7:0] vmix_r, vmix_g, vmix_b;
+reg       vmix_hs, vmix_vs, vmix_hb, vmix_vb;
+always @(posedge clk_vid) begin
+	vmix_r  <= osk_vr;
+	vmix_g  <= osk_vg;
+	vmix_b  <= osk_vb;
+	vmix_hs <= HSync;
+	vmix_vs <= VSync;
+	vmix_hb <= HBlank;
+	vmix_vb <= VBlank;
+end
+
+video_mixer #(.LINE_LENGTH(384), .GAMMA(1)) video_mixer
 (
 	.CLK_VIDEO(CLK_VIDEO),
 	.CE_PIXEL(CE_PIXEL),
-	.ce_pix(ce_pix),
+	.ce_pix(ce_pix_vid),
 	.scandoubler(forced_scandoubler),
 	.hq2x(1'b0),
 	.gamma_bus(gamma_bus),
-	.R(osk_vr),
-	.G(osk_vg),
-	.B(osk_vb),
-	.HSync(HSync),
-	.VSync(VSync),
-	.HBlank(HBlank),
-	.VBlank(VBlank),
+	.R(vmix_r),
+	.G(vmix_g),
+	.B(vmix_b),
+	.HSync(vmix_hs),
+	.VSync(vmix_vs),
+	.HBlank(vmix_hb),
+	.VBlank(vmix_vb),
 	.HDMI_FREEZE(HDMI_FREEZE),
 	.freeze_sync(freeze_sync),
 	.VGA_R(VGA_R),
