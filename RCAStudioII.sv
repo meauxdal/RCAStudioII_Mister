@@ -198,19 +198,6 @@ assign BUTTONS = 0;
 
 `include "build_id.v"
 localparam CONF_STR = {
-<<<<<<< Updated upstream
-	"RCA-StudioII;v3;",
-	"-;",
-	"F1,ST2BINROM,Load Cartridge;",
-	"F0,BINROM,Load Firmware;",
-	"-;",
-	// Mapping picks who owns the Joystick row below it. On Auto the core drives
-	// that row: it writes the profile it detected back into the menu through
-	// hps_io's status_set, so loading Gunfighter leaves the menu reading
-	// "Gunfighter" instead of "Auto". Switch to Manual and the row keeps
-	// whatever it is showing and becomes yours to change -- so Manual always
-	// starts from the detected profile rather than from a stale one.
-=======
 	"RCA-StudioII;v6;",
 	"F1,ST2BINROM,Load Cartridge;",
 	"F0,BINROM,Load Firmware;",
@@ -219,7 +206,6 @@ localparam CONF_STR = {
 	"O[14:13],Machine,Studio II,Studio III PAL,Studio III NTSC,Visicom;",
 	"R[15],Apply and reset;",
 	"-;",
->>>>>>> Stashed changes
 	"O[6],Mapping,Auto,Manual;",
 	// Value 0 is MAP_NONE, which still passes Start through; Clear-only (11) is the
 	// one that silences the pad completely. Paddle (12) is a single-player,
@@ -416,11 +402,8 @@ rcastudioii rcastudio
 	.joystick_0(joystick_0),
 	.joystick_1(joystick_1),
 	.joy_override(status[5:2]),
-<<<<<<< Updated upstream
-=======
 	.machine(machine_active),
 	.video_bg(video_bg),
->>>>>>> Stashed changes
 	.joy_manual(status[6]),
 	.auto_profile(auto_profile),
 	.players(status[8:7]),
@@ -498,11 +481,6 @@ assign CLK_VIDEO = clk_sys;
 // colour pins. The Studio II's 1861 is monochrome and drives all three together,
 // so this is still white on black -- expanding each bit to full 8-bit scale
 // gives byte-identical output to the old `video ? 8'hFF : 8'h00`.
-<<<<<<< Updated upstream
-wire [7:0] vid_r = {8{video[2]}};
-wire [7:0] vid_g = {8{video[1]}};
-wire [7:0] vid_b = {8{video[0]}};
-=======
 // BCKGND lowers the luminance of background pixels, so one colour can serve as
 // both background and data -- what the datasheet describes and what Emma 02's
 // palette shows (back_blue 0,0,128 against blue 0,0,255). Half scale here.
@@ -540,7 +518,6 @@ end
 wire [7:0] vid_r = machine_visicom ? vis_rgb[23:16] : (video[2] ? vid_lvl : 8'h00);
 wire [7:0] vid_g = machine_visicom ? vis_rgb[15:8]  : (video[1] ? vid_lvl : 8'h00);
 wire [7:0] vid_b = machine_visicom ? vis_rgb[7:0]   : (video[0] ? vid_lvl : 8'h00);
->>>>>>> Stashed changes
 
 ////////////////// On-screen keypad (Jaguar core's numstick, via ColecoAdam) //
 //
