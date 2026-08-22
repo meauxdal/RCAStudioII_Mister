@@ -78,7 +78,6 @@ module rcastudioii
 	output             audio
 );
 
-
 //  Derived from `machine`. Most of the machine-dependent behaviour keys off
 //  "is this a Studio III" (the memory map, colour RAM, the tone generator)
 //  rather than off which video part it has, which is only the PAL one.
@@ -1011,8 +1010,7 @@ reg [15:0] cpu_ram_addr;
 reg  [7:0] cpu_ram_din;
 reg  [7:0] cpu_ram_dout;
 
-reg WAIT_N      = 1'b1;   // Clear=1, Wait=1 is Run. Was 0, which only worked because cdp1802.v
-                          // had its run/pause test inverted; both are fixed now.
+reg WAIT_N      = 1'b1;   // Clear=1, Wait=1 is Run.
 
 // ---- CPU machine-cycle enable -------------------------------------------------------------
 // The CDP1861 shifts one pixel per CPU clock and a 1802 machine cycle is 8 clocks, so the CPU
@@ -1021,17 +1019,8 @@ reg WAIT_N      = 1'b1;   // Clear=1, Wait=1 is Run. Was 0, which only worked be
 // cycles per frame, which is what a real Studio II gets.
 reg  [2:0] cpu_div = 3'd0;
 wire       cpu_ce  = ce_pix & (cpu_div == 3'd7);
-// The divider's reset carries the same CLEAR carve-out as the pixie's, and it
-// must: CLEAR keeps the pixie's counters running (so video sync survives) but
-// used to zero cpu_div, so on release the machine-cycle grid re-locked at an
-// arbitrary pixel phase -- a relationship that is fixed in silicon, where
-// CLEAR resets the 1802 and the 1861 together (RCA block diagram, CLAUDE.md
-// §2.1). Three of the eight release phases left the Visicom blank or its
-// display base rotated (the 13/16-byte rotations seen on hardware,
-// docs/handoff.md 2026-08-19); the Studio II titles merely tolerated the
-// misalignment thanks to the ISR-phase work. Keeping the divider counting
-// through CLEAR keeps cpu_ce locked to the pixie across it; on every other
-// reset both still start together from zero.
+// Keep cpu_div counting through CLEAR so the CPU's machine-cycle grid stays locked to the 
+// correct machine-cycle phase.
 always @(posedge clk_sys) begin
 	if (reset & ~clear_key) cpu_div <= 3'd0;
 	else if (ce_pix)        cpu_div <= cpu_div + 3'd1;
@@ -1110,13 +1099,6 @@ cosmac cosmac (
 // The rule behind that table is one line: RAM answers wherever A9 = 0 and
 // nothing else is decoded, which is why it also reappears at $0C00, $1000,
 // $1400, $1800 and so on. A9 = 1 with no cartridge is open bus.
-//
-// This core previously had no decode at all -- one 4 KB array with the address
-// truncated to ram_a[11:0] -- so $1000 read the system ROM, the $0C00 mirror
-// did not exist, and a write at $0C00 was dropped.
-//
-// The ROM/cartridge image and the RAM are now separate arrays, so a cartridge
-// can no longer be scribbled on and the mirror costs nothing.
 
 wire         ram_rd; // MRD_N
 wire         ram_wr; // MWR_N
@@ -1173,12 +1155,6 @@ wire        ram_sel  = machine_visicom
 // reads or writes it at $13xx. Same low byte either way, so one single-port
 // array serves both and there is never a conflict -- the CPU is not driving the
 // bus during a DMA cycle.
-//
-// This is deliberately NOT port B of the main RAM, which is where it started.
-// That array already had a port-B writer (the CLEAR wipe) and so was already
-// uninferrable; adding a port-B read doubled it to 1K and doubled the logic it
-// was costing. Keeping plane 1 separate keeps both arrays in block RAM, and is
-// closer to the machine anyway -- it has separate chips.
 wire        cpu_wr   = ram_wr && ram_sel && !vis_pl1;             // RAM is the only writeable thing
 wire        pl1_wr   = ram_wr && vis_pl1;                        // ...and the Visicom's second plane
 wire        col_wr   = ram_wr && col_sel;
@@ -1195,10 +1171,7 @@ wire        col_wr   = ram_wr && col_sel;
 reg  [2:0]  colour_ram [0:63];
 // CON, "Color On". The datasheet has this pin "connected to the gated MWR signal
 // of the color memory", so colour switches on with the first write to colour RAM
-// and the part is monochrome until then. Without it, every game that never
-// writes colour RAM came out on a blue field instead of black -- which is how
-// this was caught, against the reference emulator's Conic sweep. MAME fakes it
-// with con_w(0) on every DMA and flags that as a hack.
+// and the part is monochrome until then.
 reg         colour_on;
 always @(posedge clk_sys) begin
 	if (reset)       colour_on <= 1'b0;
@@ -1210,9 +1183,7 @@ wire [2:0]  colour_cell = colour_ram[col_index];
 // Colour RAM bit order is the 1864's pin order, which is NOT {R,G,B}: MAME's
 // mpt02_state has rdata_r() = BIT(m_color,0), bdata_r() = BIT(m_color,1) and
 // gdata_r() = BIT(m_color,2), i.e. bit0 red, bit1 blue, bit2 green. Permute into
-// the {R,G,B} the video bus carries. Getting this wrong renders the right picture
-// in the wrong colours -- the pinball table came out magenta-bordered instead of
-// yellow, which is how the bug was spotted.
+// the {R,G,B} the video bus carries.
 wire [2:0]  colour_dot = {colour_cell[0], colour_cell[2], colour_cell[1]};
 
 // Both arrays have one cycle of latency, so the read mux select has to be
@@ -1229,14 +1200,7 @@ always @(posedge clk_sys) begin
 end
 // Open bus reads back as $FF, matching MAME's unmap_value_high and the likely
 // floating-bus behaviour of the real machine (nothing drives the lines, and
-// the last DMA-driven byte was usually high). This was $00 to match the C
-// reference emulator's flat array, but Robson's Hockey and Combat flash the
-// screen through the BIOS scroll register with a base that walks the display
-// DMA past $09FF into this window: with $00 those frames rendered as a black
-// screen with an 8-pixel bar (the reported "flashing strobes"); with $FF they
-// render as the full-screen white flash MAME shows. Nothing in the §9 corpus
-// reads undecoded space (tools/memdecode-test.sh covers it instead), so the
-// frame comparison is unaffected.
+// the last DMA-driven byte was usually high). 
 assign ram_q = pl1_sel_q ? pl1_q
              : ram_sel_q ? sram_q
              : rom_sel_q ? rom_q : 8'hFF;
@@ -1246,8 +1210,7 @@ assign ram_q = pl1_sel_q ? pl1_q
 //
 // The Studio II beeper is an NE555 astable gated by the 1802's Q line (SEQ/REQ).
 // Per docs/sound.txt the control pin is tied to 0V through a 10uF electrolytic,
-// which decays the pitch to about half over ~0.4s -- that droop is the "warpy"
-// power-up sound, and it is what makes it recognisable. MAME just uses a fixed
+// which decays the pitch to about half over ~0.4s. MAME just uses a fixed
 // 300Hz beeper and flags the discrete circuit as unimplemented, so this follows
 // the hardware description instead.
 //
@@ -1256,12 +1219,6 @@ assign ram_q = pl1_sel_q ? pl1_q
 //   312Hz  -> 2816 ticks
 //   0.4s   -> ~704000 ticks, so step the half period every ~500; 512 is close
 //             enough and is a free shift.
-
-// Measured from refvideo/ rather than taken from docs/sound.txt, whose component
-// values do not give a sane frequency. Spectral analysis of the Star Wars direct
-// capture puts the fundamental at 545-549 Hz across every beep (the obvious
-// zero-crossing answer, ~1570 Hz, is the harmonics -- a 555's asymmetric duty
-// cycle gives strong even harmonics, and the TV audio path thins the fundamental).
 localparam [15:0] SND_HALF_MIN = 16'd1609;   // ~547 Hz, freshly gated on
 localparam [15:0] SND_HALF_MAX = 16'd3218;   // ~274 Hz, fully decayed
 
@@ -1373,27 +1330,114 @@ always @(posedge clk_sys) begin
 	if (cart_we && cart_hi)                       cart_page[cart_a[10:8]] <= 1'b1;
 end
 
-wire [11:0] dl_a  = bios_dl ? ioctl_addr[11:0] : cart_a;
-wire        dl_we = bios_dl ? ioctl_wr : cart_we;
+// ---- Four BIOS BRAMs (boot0.rom … boot3.rom) --------------------------------
+//
+// MiSTer auto-loads bootN.rom with ioctl_index[5:0]==0 and the sub-index in
+// ioctl_index[7:6] (0=boot0 … 3=boot3). Each BRAM only accepts writes for its
+// own sub-index, so the four firmwares never overwrite each other.
+//
+// Mapping matches the OSD Machine row (status[14:13] / `machine`):
+//   0 Studio II        → boot0.rom
+//   1 Studio III PAL   → boot1.rom
+//   2 Studio III NTSC  → boot2.rom
+//   3 Visicom          → boot3.rom
+//
+// Manual "Load Firmware" (F0) arrives as sub-index 0 and therefore lands in
+// the Studio II slot; switch Machine afterward or place the file as the
+// matching bootN.rom.
+//
+// Cartridge downloads (ioctl index 1) are written into the *currently
+// selected* machine's BRAM so the cart pages sit alongside that machine's
+// firmware. cart_page remains global.
 
-// The ROM/cartridge image: system ROM at $0000-$07FF, then whatever the
-// cartridge pages into $0800-$0FFF. Read-only to the CPU.
-dpram #(8, 12) dpram
+wire [1:0]  bios_slot = ioctl_index[7:6];
+
+wire [11:0] dl_a  = bios_dl ? ioctl_addr[11:0] : cart_a;
+
+// BIOS write: only the matching boot-slot BRAM
+wire        bios_we0 = bios_dl && ioctl_wr && (bios_slot == 2'd0);
+wire        bios_we1 = bios_dl && ioctl_wr && (bios_slot == 2'd1);
+wire        bios_we2 = bios_dl && ioctl_wr && (bios_slot == 2'd2);
+wire        bios_we3 = bios_dl && ioctl_wr && (bios_slot == 2'd3);
+
+// Cart write: into the BRAM that belongs to the active machine
+wire        cart_we0 = cart_we && (machine == 2'd0);
+wire        cart_we1 = cart_we && (machine == 2'd1);
+wire        cart_we2 = cart_we && (machine == 2'd2);
+wire        cart_we3 = cart_we && (machine == 2'd3);
+
+wire        we0 = bios_we0 | cart_we0;
+wire        we1 = bios_we1 | cart_we1;
+wire        we2 = bios_we2 | cart_we2;
+wire        we3 = bios_we3 | cart_we3;
+
+wire [7:0]  rom0_q, rom1_q, rom2_q, rom3_q;
+
+dpram #(8, 12) rom0
 (
 	.clock(clk_sys),
 	.ram_cs(1'b1),
 	.address_a(ioctl_download ? dl_a : ram_a[11:0]),
-	.wren_a(dl_we),
+	.wren_a(we0),
 	.data_a(ioctl_dout),
-	.q_a(rom_q),
-
-	// Port B was only ever the 1861's RAM scraper; the real part is fed by the CPU over DMA.
+	.q_a(rom0_q),
 	.ram_cs_b(1'b0),
 	.wren_b(1'b0),
 	.address_b(12'd0),
 	.data_b(),
 	.q_b()
 );
+
+dpram #(8, 12) rom1
+(
+	.clock(clk_sys),
+	.ram_cs(1'b1),
+	.address_a(ioctl_download ? dl_a : ram_a[11:0]),
+	.wren_a(we1),
+	.data_a(ioctl_dout),
+	.q_a(rom1_q),
+	.ram_cs_b(1'b0),
+	.wren_b(1'b0),
+	.address_b(12'd0),
+	.data_b(),
+	.q_b()
+);
+
+dpram #(8, 12) rom2
+(
+	.clock(clk_sys),
+	.ram_cs(1'b1),
+	.address_a(ioctl_download ? dl_a : ram_a[11:0]),
+	.wren_a(we2),
+	.data_a(ioctl_dout),
+	.q_a(rom2_q),
+	.ram_cs_b(1'b0),
+	.wren_b(1'b0),
+	.address_b(12'd0),
+	.data_b(),
+	.q_b()
+);
+
+dpram #(8, 12) rom3
+(
+	.clock(clk_sys),
+	.ram_cs(1'b1),
+	.address_a(ioctl_download ? dl_a : ram_a[11:0]),
+	.wren_a(we3),
+	.data_a(ioctl_dout),
+	.q_a(rom3_q),
+	.ram_cs_b(1'b0),
+	.wren_b(1'b0),
+	.address_b(12'd0),
+	.data_b(),
+	.q_b()
+);
+
+// CPU (and DMA) reads the BRAM for the selected machine.
+assign rom_q = (machine == 2'd0) ? rom0_q :
+               (machine == 2'd1) ? rom1_q :
+               (machine == 2'd2) ? rom2_q :
+                                   rom3_q;
 
 // The RAM: 512 bytes ($0800-$08FF program/system, $0900-$09FF display on the
 // Studio II and III; $1000-$11FF on the Visicom, whose bit plane 0 is its top
