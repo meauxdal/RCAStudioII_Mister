@@ -26,6 +26,7 @@ module rcastudioii
 (
 	input              clk_sys,
 	input              reset,
+	input              video_reset,
 	
 	input wire         ioctl_download,
 	input wire   [7:0] ioctl_index,
@@ -43,7 +44,7 @@ module rcastudioii
 	input        [9:0] osk_a,          // on-screen keypad presses for keypad A (bit = key)
 	input        [9:0] osk_b,          // and for keypad B
 	input  reg         ce_pix,
-	input              clear_key,      // CLEAR button input from top-level; keep video alive during CLEAR
+	input              clear_key,      // literal CLEAR input; also owns the VRAM-clear behavior below
 	//  Which machine, from the OSD:
 	//    0  Studio II          CDP1861, NTSC, monochrome
 	//    1  Studio III PAL     CDP1864 -- video, colour and tone in one part
@@ -94,6 +95,7 @@ localparam [1:0] MACHINE_VISICOM   = 2'd3;
 wire is_studio3      = (machine == MACHINE_S3_PAL) || (machine == MACHINE_S3_NTSC);
 wire machine_mpt02   = (machine == MACHINE_S3_PAL);   // has the CDP1864
 wire machine_visicom = (machine == MACHINE_VISICOM);
+wire preserve_sync_reset = reset && !video_reset;
 
 ////////////////// VIDEO //////////////////////////////////////////////////////////////////
 
@@ -111,7 +113,7 @@ wire        EFx;
 pixie_video pixie_video (
     // front end, CDP1802 bus clock domain
     .clk        (clk_sys),    // I
-    .reset      (reset & ~clear_key),      // I: keep pixie running while CLEAR (clear_key==1) so VSYNC doesn't lose sync
+    .reset      (video_reset),             // I: soft resets keep raster timing alive
 
     .clk_enable (ce_pix),     // I
     .cpu_ce     (cpu_ce),     // I  CPU machine-cycle enable, for sampling DMA bytes
@@ -127,7 +129,7 @@ pixie_video pixie_video (
     // PIXIE_OUT_OUT with only the enable populated.
     .disp_on    (machine_visicom ? (io_out && (io_n == 3'd1))
                                  : (io_inp && (io_n == 3'd1))),  // I
-    .disp_off   ((!machine_visicom && io_out && (io_n == 3'd1)) || clear_key),  // I: also blank display while CLEAR is asserted
+    .disp_off   ((!machine_visicom && io_out && (io_n == 3'd1)) || preserve_sync_reset),  // I: blank while preserving raster timing
 
 
     .data_in    (ram_q),      // I [7:0]  byte the CPU delivers during a DMA-OUT cycle
@@ -176,14 +178,14 @@ cdp1864 cdp1864
     .clk        (clk_sys),
     .ce_pix     (ce_pix),
     .cpu_ce     (cpu_ce),
-    .reset      (reset & ~clear_key),
+    .reset      (video_reset),
 
     .SC         (SC),
     .data_in    (ram_q),
     .colour_in  (colour_dot),
     .con        (colour_on),
     .disp_on    (io_inp && (io_n == 3'd1)),
-    .disp_off   ((io_inp && (io_n == 3'd4)) || clear_key),
+    .disp_off   ((io_inp && (io_n == 3'd4)) || preserve_sync_reset),
     .bg_step    (io_out && (io_n == 3'd1)),
 
     .DMAO       (DMAO_64),
@@ -213,7 +215,7 @@ cdp1863 cdp1863
 (
     .clk     (clk_sys),
     .cpu_ce  (cpu_ce),
-    .reset   (reset & ~clear_key),
+    .reset   (video_reset | (preserve_sync_reset & ~clear_key)),
     // The 1864's integrated generator has an extra divide-by-4 that the
     // standalone 1863 does not, so the same latch sounds four times higher on
     // the NTSC machine. MAME: cdp1864 f = clk/8/4/(latch+1)/2 against cdp1863
@@ -1019,11 +1021,11 @@ reg WAIT_N      = 1'b1;   // Clear=1, Wait=1 is Run.
 // cycles per frame, which is what a real Studio II gets.
 reg  [2:0] cpu_div = 3'd0;
 wire       cpu_ce  = ce_pix & (cpu_div == 3'd7);
-// Keep cpu_div counting through CLEAR so the CPU's machine-cycle grid stays locked to the 
-// correct machine-cycle phase.
+// Keep cpu_div counting through sync-preserving resets so the CPU's machine-cycle grid stays locked
+// to the raster phase. Only a hard video reset restarts the divider.
 always @(posedge clk_sys) begin
-	if (reset & ~clear_key) cpu_div <= 3'd0;
-	else if (ce_pix)        cpu_div <= cpu_div + 3'd1;
+	if (video_reset) cpu_div <= 3'd0;
+	else if (ce_pix) cpu_div <= cpu_div + 3'd1;
 end
 reg dma_in_req  = 1'b0;
 //reg dma_out_req = 1'b0;
