@@ -1270,7 +1270,12 @@ assign audio = is_studio3 ? aud_tone : snd_out;
 // The format is detected purely from the "RCA2" magic in the first four bytes.
 // The OSD extension index (ioctl_index[7:6]) is deliberately not used.
 
-wire        bios_dl = ioctl_download && (ioctl_index[5:0] == 6'd0);
+// Index 0 is bootN.rom autoload (slot in ioctl_index[7:6]); index 2 is the
+// OSD "Load Firmware" entry, whose [7:6] carries the picked file's extension
+// index instead of a slot, so it routes to the selected machine's slot below.
+wire        boot_dl = ioctl_download && (ioctl_index[5:0] == 6'd0);
+wire        fw_dl   = ioctl_download && (ioctl_index[5:0] == 6'd2);
+wire        bios_dl = boot_dl | fw_dl;
 wire        cart_dl = ioctl_download && (ioctl_index[5:0] == 6'd1);
 
 reg  [2:0]  st2_magic;                  // running match on "RCA"
@@ -1342,15 +1347,16 @@ end
 //   2 Studio III NTSC  → boot2.rom
 //   3 Visicom          → boot3.rom
 //
-// Manual "Load Firmware" (F0) arrives as sub-index 0 and therefore lands in
-// the Studio II slot; switch Machine afterward or place the file as the
-// matching bootN.rom.
+// Manual "Load Firmware" (F2) lands in the *currently selected* machine's
+// slot: pick the machine, Apply, then load its firmware. (It cannot ride
+// ioctl_index[7:6] the way boot autoload does -- menu loads put the file's
+// extension index there, so a .rom would always land in slot 1.)
 //
 // Cartridge downloads (ioctl index 1) are written into the *currently
 // selected* machine's BRAM so the cart pages sit alongside that machine's
 // firmware. cart_page remains global.
 
-wire [1:0]  bios_slot = ioctl_index[7:6];
+wire [1:0]  bios_slot = fw_dl ? machine : ioctl_index[7:6];
 
 wire [11:0] dl_a  = bios_dl ? ioctl_addr[11:0] : cart_a;
 

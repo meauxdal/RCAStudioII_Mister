@@ -208,7 +208,12 @@ assign BUTTONS = 0;
 localparam CONF_STR = {
 	"RCA-StudioII;v6;",
 	"F1,ST2BINROM,Load Cartridge;",
-	"F0,BINROM,Load Firmware;",
+	// Index 2, not 0: menu loads carry the picked file's *extension* index in
+	// ioctl_index[7:6] (BIN=0, ROM=1), which collides with the bootN.rom slot
+	// numbering -- an F0 menu load of a .rom landed in the Studio III PAL BRAM.
+	// On index 2 the core can tell menu firmware apart from boot autoload and
+	// route it to the selected machine's slot (rtl/rcastudioii.sv).
+	"F2,BINROM,Load Firmware;",
 	"-;",
 	// Machine is staged; nothing changes until Apply is pressed
 	"O[14:13],Machine,Studio II,Studio III PAL,Studio III NTSC,Visicom;",
@@ -323,7 +328,7 @@ wire ce_pix = (ce_cnt == 2'd0);
 wire joy_clear = joystick_0[7] | joystick_1[7];
 wire clear_request = status[1] | clear_key | joy_clear;
 
-wire reset = RESET | status[0] | clear_request | buttons[1] | ioctl_download | download_reset | ~rom_loaded | apply_reset;
+wire reset = RESET | status[0] | clear_request | buttons[1] | ioctl_download | download_reset | ~rom_loaded | apply_reset | mach_reset;
 
 // reset after download
 reg [7:0] download_reset_cnt;
@@ -332,7 +337,7 @@ wire download_reset = download_reset_cnt != 0;
 always @(posedge CLK_50M) begin
 	if(ioctl_download || status[0] || buttons[1] || RESET ) download_reset_cnt <= 8'd255;
 	else if(download_reset_cnt != 0) download_reset_cnt <= download_reset_cnt - 8'd1;
-	if(ioctl_download && ioctl_index[5:0] == 0 && ioctl_addr == 24'd100) rom_loaded <= 1'b1;
+	if(ioctl_download && (ioctl_index[5:0] == 0 || ioctl_index[5:0] == 2) && ioctl_addr == 24'd100) rom_loaded <= 1'b1;
 end
 
 reg rom_loaded = 0;
@@ -363,11 +368,30 @@ end
 // status[14:13], is what actually reaches the core and the Visicom palette
 // mux below, so nothing about the memory map, video chipset or colour RAM
 // reconfigures until the operator asks for it.
+//
+// The one exception is the boot-follow window: for the first ~0.6s after
+// core start machine_active tracks status[14:13] directly, because that is
+// when Main delivers the *saved* config -- without it a saved Machine choice
+// sat dormant until the operator pressed Apply every single power-on. Each
+// change inside the window comes with the same stretched reset an Apply
+// gets, since the saved row can arrive after the boot firmware has already
+// released the CPU. The window is far shorter than a human can reach the
+// OSD, so staging is intact for the operator.
 reg [1:0] machine_active = 2'd0;
+reg [22:0] boot_follow_cnt = 23'd0;                  // ~0.6s at clk_sys
+wire       boot_follow = ~boot_follow_cnt[22];
+reg  [7:0] mach_reset_cnt = 8'd0;
+wire       mach_reset = mach_reset_cnt != 0;
 always @(posedge clk_sys) begin
 	reg apply_reset_d;
 	apply_reset_d <= apply_reset;
+	if (boot_follow) boot_follow_cnt <= boot_follow_cnt + 23'd1;
 	if (apply_reset && !apply_reset_d) machine_active <= status[14:13];
+	if (boot_follow && (machine_active != status[14:13])) begin
+		machine_active <= status[14:13];
+		mach_reset_cnt <= 8'd255;
+	end
+	else if (mach_reset_cnt != 0) mach_reset_cnt <= mach_reset_cnt - 8'd1;
 end
 
 //////////////////////////////////////////////////////////////////
