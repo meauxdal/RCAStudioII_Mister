@@ -675,7 +675,7 @@ always @(posedge clk_vid) begin
 	vmix_vb <= VBlank;
 end
 
-video_mixer #(.LINE_LENGTH(384), .GAMMA(1)) video_mixer
+video_mixer #(.LINE_LENGTH(352), .GAMMA(1)) video_mixer
 (
 	.CLK_VIDEO(CLK_VIDEO),
 	.CE_PIXEL(CE_PIXEL),
@@ -703,6 +703,15 @@ video_mixer #(.LINE_LENGTH(384), .GAMMA(1)) video_mixer
 wire [1:0] ar = status[122:121];
 wire       is_pal = (machine_active == 2'd1);
 
+// The raster's final DE falling edge coincides with the VSync rising edge.
+// video_freak handles both in one clocked block, where its later DE-edge count
+// can overwrite the VSync reset and corrupt the measured frame height. Present
+// VSync one output pixel later so those events are handled on separate enables.
+reg vf_vs = 1'b0;
+always @(posedge CLK_VIDEO) begin
+	if (CE_PIXEL) vf_vs <= VGA_VS;
+end
+
 wire scale_active = |status[12:11];
 wire [11:0] arx_val = (scale_active || ar == 2'd0) ? 12'd4 : {10'd0, ar - 1'd1};
 wire [11:0] ary_val = (scale_active || ar == 2'd0) ? 12'd3  : 12'd0;
@@ -711,7 +720,7 @@ video_freak video_freak
 (
     .CLK_VIDEO(CLK_VIDEO),
     .CE_PIXEL(CE_PIXEL),
-    .VGA_VS(VGA_VS),
+    .VGA_VS(vf_vs),
     .HDMI_WIDTH(HDMI_WIDTH),
     .HDMI_HEIGHT(HDMI_HEIGHT),
     .VGA_DE(VGA_DE),
