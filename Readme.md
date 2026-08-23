@@ -22,7 +22,8 @@ Video output includes aspect-ratio controls and working vertical / horizontal+ve
 - Automatic joystick profiles work and the detected profile is shown in the OSD, but some assignments still need further real-world testing.
 - Visicom software can run and play correctly, but some sessions become glitchy after input until the machine/game is reset or reloaded. The exact hardware behaviour is not yet known.
 - A line at the bottom of the picture has been observed with some BIOS/software combinations, particularly the Studio III NTSC BIOS. This needs comparison against a reference emulator or real hardware before treating it as a core video defect.
-- Analog/direct video output is implemented but has not yet been verified on real hardware.
+- Analog video output is implemented and has been confirmed to work. Direct video
+should work but has not yet been tested at time of writing.
 
 ## Features
 
