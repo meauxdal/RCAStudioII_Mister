@@ -11,19 +11,19 @@ MiSTer FPGA core for the **RCA Studio II** (1977), with support for the Studio I
 | **RCA Studio II** | Playable across known software | CDP1861 monochrome video; discrete beeper |
 | **Studio III PAL / MPT-02 family** | Playable across known software | CDP1864 colour video and tone |
 | **Studio III NTSC** | Playable across known software | CDP1861 + CDP1862 colour + CDP1863 tone |
-| **Toshiba Visicom COM-100** | All dumped games can run correctly; intermittent startup/input instability remains under investigation | CDP1861 timing with Toshiba's two-plane four-colour video |
+| **Toshiba Visicom COM-100** | All dumped games can run correctly; intermittent startup instability remains under investigation | CDP1861 timing with Toshiba's two-plane four-colour video |
 
-The CDP1802 implementation includes interrupts, DMA and machine-cycle timing. Cartridge and system ROM, RAM and machine-specific memory maps are decoded separately, including Studio II RAM mirroring, Studio III colour RAM and the Visicom's different RAM layout.
-
-Video output includes aspect-ratio controls and working vertical / horizontal+vertical integer scaling. `CLEAR` resets the machine while keeping Pixie timing running, avoiding unnecessary HDMI resync during normal play.
+The CDP1802 implementation includes interrupts, DMA and machine-cycle timing. Cartridge and 
+system ROM, RAM and machine-specific memory maps are decoded separately, including Studio II 
+RAM mirroring, Studio III colour RAM and the Visicom's divergent RAM layout.
 
 ### Known issues / open verification
 
-- Automatic joystick profiles work and the detected profile is shown in the OSD, but some assignments still need further real-world testing.
-- Visicom software can run and play correctly, but some sessions become glitchy after input until the machine/game is reset or reloaded. The exact hardware behaviour is not yet known.
-- A line at the bottom of the picture has been observed with some BIOS/software combinations, particularly the Studio III NTSC BIOS. This needs comparison against a reference emulator or real hardware before treating it as a core video defect.
-- Analog video output is implemented and has been confirmed to work. Direct video
-should work but has not yet been tested at time of writing.
+- Visicom software can behave unexpectedly (visual glitches, hanging) when pressing certain keys at game start. It is not currently determined if this is hardware accurate behavior. All Visicom software can be played without issue by pressing an intended game start key. Graphical corruptions can be cleared via `Clear` or `Reset and close OSD`.
+- The Studio II (Alt) and Studio III (4KB) BIOS dumps show a horizontal line at the bottom of the visible area. It is not currently determined if this is hardware-accurate behavior.
+- Beeper frequency needs additional fine tuning. The core currently starts somewhere around 300 Hz and instantly begins decaying. Tuning a real hardware recording against a digital piano reveals the starting pitch should be closer to Eb4 (311.127 Hz) and the pitch decay profile should be delayed subtly.
+- Direct video should work but has not yet been tested at time of writing.
+- Not every game and mode has an automap profile, and not all known software is present in the hash table.
 
 ## Features
 
@@ -40,7 +40,8 @@ should work but has not yet been tested at time of writing.
 
 Copy a release from `releases/` to e.g. `/media/fat/_Console/` on MiSTer.
 
-Firmware is not embedded. Put the BIOS files in `/media/fat/games/RCA-StudioII/` using the standard MiSTer boot slots:
+Firmware is not embedded. Put the BIOS files in `/media/fat/games/RCA-StudioII/` using the 
+standard MiSTer boot slots:
 
 | Machine | Automatic BIOS |
 |---|---|
@@ -49,7 +50,8 @@ Firmware is not embedded. Put the BIOS files in `/media/fat/games/RCA-StudioII/`
 | Studio III NTSC | `boot2.rom` |
 | Visicom | `boot3.rom` |
 
-All four BIOS slots are resident; changing machine selects the corresponding image. `Load Firmware` writes a `.bin` or `.rom` image into the currently selected machine's slot.
+All four BIOS slots are resident; changing machine selects the corresponding image. `Load 
+Firmware` writes a `.bin` or `.rom` image into the currently selected machine's slot.
 
 Known working images include:
 
@@ -66,7 +68,9 @@ Known working images include:
 
 ## Controls
 
-The Studio II has two 10-key keypads. Keypad A is the left keypad (`EF3`) and keypad B is the right keypad (`EF4`).
+The Studio II has two 10-key keypads (called Keyboard A and B in official documentation;
+we use Keypad here instead to avoid confusion with the modern usage of keybooard). Keypad A 
+is the left keypad (`EF3`) and keypad B is the right keypad (`EF4`).
 
 ```text
    Keypad A (left)        Keypad B (right)
@@ -136,9 +140,11 @@ See `CLAUDE.md` for the detailed hardware references, regression procedures, tim
 
 ## Credits
 
-The original core was created by **Jason Coombes** ([@JasonA-dev](https://github.com/JasonA-dev)), with MiSTer integration and early Pixie work by **Flandango** ([@Flandango](https://github.com/Flandango)). Later 2026 CPU/video/timing work was carried by **Alan Steremberg** ([@alanswx](https://github.com/alanswx)), with controller/profile, OSD and extensive software testing work by **Elle Ball** ([@meauxdal](https://github.com/meauxdal)).
+The original core is the work of **Jason Coombes** ([@JasonA-dev](https://github.com/JasonA-dev)), whose work remains fundamental to the project; and MiSTer integration and early Pixie work by **Flandango** ([@Flandango](https://github.com/Flandango)). Later 2026 CPU/video/timing work was carried by **Alan Steremberg** ([@alanswx](https://github.com/alanswx)), with controller/profile, OSD and extensive software testing work by **Elle Ball** ([@meauxdal](https://github.com/meauxdal)).
 
-Accuracy work also relies heavily on Paul Robson's Studio II emulator and homebrew, MAME, Marcel van Tongeren's Emma 02, Andrew Modla's `rca-studio2`, Eric Smith's COSMAC VHDL, dmadole's AVI1861, kanpapa's `cosmac_mbc`, RCA documentation and community hardware research.
+Accuracy work also relies heavily on Paul Robson's Studio II emulator and homebrew, MAME, Marcel van Tongeren's Emma 02, Andrew Modla's `rca-studio2`, Eric Smith's COSMAC VHDL, dmadole's AVI1861, kanpapa's `cosmac_mbc`, RCA documentation, and community hardware research.
+
+Special thanks to Kevin Bunch for critical insight and guidance, and to the Hagley Museum and Library for their generous and preservation-minded disposition regarding archival material.
 
 ## Licence
 
