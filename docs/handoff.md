@@ -13,6 +13,7 @@ for whatever you are about to touch.
 | `CLAUDE.md` | The working reference: hardware facts, file map, build, conventions, and a dated changelog in §10 that explains *why* the odd things are the way they are. |
 | `docs/succession-plan.md` | The four machines: what each is, how each was implemented, what was measured. §8 analog video, §9 NTSC Studio III, §10 Studio IV (out of scope), §11 Visicom. |
 | `docs/analog-video.md` | The one unfinished feature with real hardware risk. Implementation state, test procedure, failure table. |
+| `docs/reset-sync-postmortem.md` | Why generalized sync-preserving loads and machine changes were rolled back and deferred until after 1.0. |
 | `Readme.md` | User-facing: controls, cartridge compatibility, BIOS hashes, limitations. |
 | `docs/how-to-play.md` | Per-title controls. |
 | `docs/*.txt` | Scraped hardware notes (I/O map, memory map, video, sound, cartridge format). |

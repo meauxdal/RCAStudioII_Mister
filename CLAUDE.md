@@ -109,7 +109,7 @@ The current 1861 DMA timing includes the phase work needed by real software:
 - 192-line display area.
 - PAL ↔ NTSC machine changes are genuine timing-standard changes and may break display sync; this is accepted.
 
-## CLEAR, reset and future sync-preserving resets
+## CLEAR and reset policy
 
 CLEAR is part of normal Studio software operation, not merely a developer reset. Some games effectively begin immediately after CLEAR, so dropping HDMI sync on every CLEAR makes them unpleasant or impossible to use normally.
 
@@ -122,7 +122,12 @@ Current implementation resets the CPU while keeping Pixie timing alive:
 
 This is shared by Studio II, Studio III NTSC and Visicom because all three use the same 1861 path. The existing DMA parity/reacquisition work is therefore applicable to all three.
 
-Desired future reset policy:
+The broader sync-preserving reset policy is deferred until after the 1.0
+MiSTer-devel submission. The 2026-08-23 attempt caused complete HDMI sync loss
+on hardware and was rolled back to the last working implementation. See
+`docs/reset-sync-postmortem.md` before revisiting it.
+
+Desired post-1.0 reset policy:
 
 **Full reset**
 - initial core/FPGA load;
@@ -136,7 +141,9 @@ Desired future reset policy:
 
 For a sync-preserving reset, stop/reset CPU and machine state and blank the display, but keep raster counters, sync generation and the CPU phase divider running. Hold the machine reset through the cartridge download so code cannot execute while BRAM is being rewritten.
 
-This policy is not implemented for every reset source yet; do not confuse the existing CLEAR behaviour with completion of the broader reset-policy work.
+This policy is not implemented for every reset source; do not confuse the
+existing CLEAR behaviour with completion of the broader reset-policy work. It
+is not a 1.0 blocker.
 
 ## Machine selection and BIOSes
 
