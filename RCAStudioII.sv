@@ -147,6 +147,7 @@ module emu
 	//Set all output SDRAM_* signals to Z ASAP if SDRAM2_EN is 0
 	input         SDRAM2_EN,
 	output        SDRAM2_CLK,
+	output [12:0] SDRAM2_A,
 	output  [1:0] SDRAM2_BA,
 	inout  [15:0] SDRAM2_DQ,
 	output        SDRAM2_nCS,
