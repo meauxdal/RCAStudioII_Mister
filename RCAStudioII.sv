@@ -368,12 +368,12 @@ end
 // CLK_50M-wide pulse is not safe to sample directly over there) and gives
 // the reset itself the same duration a download's reset gets.
 reg [1:0] machine_active = 2'd0;
-reg [7:0] apply_reset_cnt;
+reg [7:0] apply_reset_cnt = 8'd0;
 reg       apply_video_hard = 1'b0;
 wire      apply_reset = apply_reset_cnt != 0;
 wire      apply_crossing_now = (machine_active == 2'd1) ^ (status[14:13] == 2'd1);
 always @(posedge CLK_50M) begin
-	reg apply_d;
+	reg apply_d = 1'b0;
 	apply_d <= status[15];
 	if (status[15] && !apply_d) begin
 		apply_reset_cnt <= 8'd255;
@@ -404,7 +404,7 @@ wire       boot_follow = ~boot_follow_cnt[22];
 reg  [7:0] mach_reset_cnt = 8'd0;
 wire       mach_reset = mach_reset_cnt != 0;
 always @(posedge clk_sys) begin
-	reg apply_reset_d;
+	reg apply_reset_d = 1'b0;
 	apply_reset_d <= apply_reset;
 	if (boot_follow) boot_follow_cnt <= boot_follow_cnt + 23'd1;
 	if (apply_reset && !apply_reset_d) machine_active <= status[14:13];
