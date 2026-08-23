@@ -391,14 +391,13 @@ end
 // mux below, so nothing about the memory map, video chipset or colour RAM
 // reconfigures until the operator asks for it.
 //
-// The one exception is the boot-follow window: for the first ~0.6s after
-// core start machine_active tracks status[14:13] directly, because that is
-// when Main delivers the *saved* config -- without it a saved Machine choice
-// sat dormant until the operator pressed Apply every single power-on. Each
-// change inside the window comes with the same stretched reset an Apply
-// gets, since the saved row can arrive after the boot firmware has already
-// released the CPU. The window is far shorter than a human can reach the
-// OSD, so staging is intact for the operator.
+// The one exception is saved-config restore at boot. Main delivers status while
+// it is also autoloading the boot ROMs, so changing machine_active immediately
+// can reconfigure the active machine in the middle of firmware/reset startup.
+// Keep the known Studio II power-up selection for the ~0.6s boot window, then
+// apply Main's final saved value exactly once under the normal stretched reset.
+// The window is far shorter than a human can reach the OSD, so staging remains
+// intact for the operator.
 reg [22:0] boot_follow_cnt = 23'd0;                  // ~0.6s at clk_sys
 wire       boot_follow = ~boot_follow_cnt[22];
 reg  [7:0] mach_reset_cnt = 8'd0;
@@ -408,7 +407,8 @@ always @(posedge clk_sys) begin
 	apply_reset_d <= apply_reset;
 	if (boot_follow) boot_follow_cnt <= boot_follow_cnt + 23'd1;
 	if (apply_reset && !apply_reset_d) machine_active <= status[14:13];
-	if (boot_follow && (machine_active != status[14:13])) begin
+	if (boot_follow && (boot_follow_cnt == 23'h3FFFFF) &&
+	    (machine_active != status[14:13])) begin
 		machine_active <= status[14:13];
 		mach_reset_cnt <= 8'd255;
 	end
@@ -675,7 +675,7 @@ always @(posedge clk_vid) begin
 	vmix_vb <= VBlank;
 end
 
-video_mixer #(.LINE_LENGTH(384), .GAMMA(1)) video_mixer
+video_mixer #(.LINE_LENGTH(352), .GAMMA(1)) video_mixer
 (
 	.CLK_VIDEO(CLK_VIDEO),
 	.CE_PIXEL(CE_PIXEL),
@@ -703,6 +703,15 @@ video_mixer #(.LINE_LENGTH(384), .GAMMA(1)) video_mixer
 wire [1:0] ar = status[122:121];
 wire       is_pal = (machine_active == 2'd1);
 
+// The raster's final DE falling edge coincides with the VSync rising edge.
+// video_freak handles both in one clocked block, where its later DE-edge count
+// can overwrite the VSync reset and corrupt the measured frame height. Present
+// VSync one output pixel later so those events are handled on separate enables.
+reg vf_vs = 1'b0;
+always @(posedge CLK_VIDEO) begin
+	if (CE_PIXEL) vf_vs <= VGA_VS;
+end
+
 wire scale_active = |status[12:11];
 wire [11:0] arx_val = (scale_active || ar == 2'd0) ? 12'd4 : {10'd0, ar - 1'd1};
 wire [11:0] ary_val = (scale_active || ar == 2'd0) ? 12'd3  : 12'd0;
@@ -711,7 +720,7 @@ video_freak video_freak
 (
     .CLK_VIDEO(CLK_VIDEO),
     .CE_PIXEL(CE_PIXEL),
-    .VGA_VS(VGA_VS),
+    .VGA_VS(vf_vs),
     .HDMI_WIDTH(HDMI_WIDTH),
     .HDMI_HEIGHT(HDMI_HEIGHT),
     .VGA_DE(VGA_DE),
