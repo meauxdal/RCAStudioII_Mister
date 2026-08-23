@@ -289,9 +289,7 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 	.buttons(buttons),
 	.status(status),
 	.status_in(status_in),
-    // Tied low (mind write timing here; too late and it looks like 
-	// settings don't save)
-	.status_set(1'b0), //.status_set(status_set),
+	.status_set(status_set),
 	.status_menumask(status_menumask),
 
 	.ps2_key(ps2_key),
@@ -477,8 +475,10 @@ always @(posedge clk_sys) begin
 	// Schedule exactly one write on initial Auto mode, a new detection, or a
 	// Manual-to-Auto transition. Do not test whether the row is stale here: that
 	// would reload the delay on every clock and prevent the write from firing.
-	if ((!auto_sync_done && !status[6]) || (auto_profile != auto_d) ||
-	    (manual_d && !status[6])) begin
+	// Gated by !boot_follow so initial status writeback only happens after Main
+	// has delivered saved settings.
+	if (!boot_follow && ((!auto_sync_done && !status[6]) || (auto_profile != auto_d) ||
+	    (manual_d && !status[6]))) begin
 		auto_sync_done <= 1'b1;
 		push_pending <= 1'b1;
 		// ~0.3 s at 7.04 MHz. map_profile only settles when the transfer ends,
@@ -488,7 +488,7 @@ always @(posedge clk_sys) begin
 	else if (|push_dly) begin
 		push_dly <= push_dly - 1'b1;
 	end
-	else if (push_pending && !status[6] && !ioctl_download) begin
+	else if (push_pending && !status[6] && !ioctl_download && !boot_follow) begin
 		push_pending <= 1'b0;
 		status_in    <= {status[127:6], auto_profile, status[1:0]};
 		status_set   <= 1'b1;
@@ -665,6 +665,10 @@ video_mixer #(.LINE_LENGTH(384), .GAMMA(1)) video_mixer
 wire [1:0] ar = status[122:121];
 wire       is_pal = (machine_active == 2'd1);
 
+wire scale_active = |status[12:11];
+wire [11:0] arx_val = (scale_active || ar == 2'd0) ? 12'd13 : {10'd0, ar - 1'd1};
+wire [11:0] ary_val = (scale_active || ar == 2'd0) ? 12'd8  : 12'd0;
+
 video_freak video_freak
 (
     .CLK_VIDEO(CLK_VIDEO),
@@ -676,8 +680,8 @@ video_freak video_freak
     .VIDEO_ARX(VIDEO_ARX),
     .VIDEO_ARY(VIDEO_ARY),
     .VGA_DE_IN(vga_de),
-    .ARX((!ar) ? 12'd4 : (ar - 1'd1)),
-    .ARY((!ar) ? 12'd3 : 12'd0),
+    .ARX(arx_val),
+    .ARY(ary_val),
 	.CROP_SIZE(12'd0),
 	.CROP_OFF(5'd0),
     .SCALE({1'b0, status[12:11]})
