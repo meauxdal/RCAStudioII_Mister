@@ -147,7 +147,6 @@ module emu
 	//Set all output SDRAM_* signals to Z ASAP if SDRAM2_EN is 0
 	input         SDRAM2_EN,
 	output        SDRAM2_CLK,
-	output [12:0] SDRAM2_A,
 	output  [1:0] SDRAM2_BA,
 	inout  [15:0] SDRAM2_DQ,
 	output        SDRAM2_nCS,
@@ -326,19 +325,35 @@ wire ce_pix = (ce_cnt == 2'd0);
 wire joy_clear = joystick_0[7] | joystick_1[7];
 wire clear_request = status[1] | clear_key | joy_clear;
 
-wire reset = RESET | status[0] | clear_request | buttons[1] | ioctl_download | download_reset | ~rom_loaded | apply_reset | mach_reset;
+// F1/F2 are user-initiated reloads of the active machine and preserve raster
+// timing. Boot firmware (index 0) and unknown downloads remain hard-reset
+// events. Keep the class latched through the post-download hold because
+// ioctl_index is only meaningful during the transfer.
+wire      user_download_now = (ioctl_index[5:0] == 6'd1) || (ioctl_index[5:0] == 6'd2);
+reg       download_soft_latched = 1'b0;
+reg [7:0] download_reset_cnt = 8'd0;
+wire      download_reset = ioctl_download | (download_reset_cnt != 0);
+wire      download_soft = ioctl_download ? user_download_now : download_soft_latched;
 
-// reset after download
-reg [7:0] download_reset_cnt;
-wire download_reset = download_reset_cnt != 0;
+// RESET / Reset-and-close-OSD / MiSTer user reset are always hard and get their
+// own hold. Do not reuse the download counter: doing so lets stale download
+// classification leak into unrelated reset sources.
+reg [7:0] hard_reset_cnt = 8'd0;
+wire      hard_reset_hold = hard_reset_cnt != 0;
+reg       rom_loaded = 0;
 
 always @(posedge CLK_50M) begin
-	if(ioctl_download || status[0] || buttons[1] || RESET ) download_reset_cnt <= 8'd255;
-	else if(download_reset_cnt != 0) download_reset_cnt <= download_reset_cnt - 8'd1;
+	if (ioctl_download) begin
+		download_reset_cnt <= 8'd255;
+		download_soft_latched <= user_download_now;
+	end
+	else if (download_reset_cnt != 0) download_reset_cnt <= download_reset_cnt - 8'd1;
+
+	if (RESET || status[0] || buttons[1]) hard_reset_cnt <= 8'd255;
+	else if (hard_reset_cnt != 0) hard_reset_cnt <= hard_reset_cnt - 8'd1;
+
 	if(ioctl_download && (ioctl_index[5:0] == 0 || ioctl_index[5:0] == 2) && ioctl_addr == 24'd100) rom_loaded <= 1'b1;
 end
-
-reg rom_loaded = 0;
 
 ////////////////// Machine select: staged, applied on request ////////////////
 //
@@ -351,12 +366,19 @@ reg rom_loaded = 0;
 // derives from CLK_50M with no fixed phase relationship, so a single
 // CLK_50M-wide pulse is not safe to sample directly over there) and gives
 // the reset itself the same duration a download's reset gets.
+reg [1:0] machine_active = 2'd0;
 reg [7:0] apply_reset_cnt;
+reg       apply_video_hard = 1'b0;
 wire      apply_reset = apply_reset_cnt != 0;
 always @(posedge CLK_50M) begin
 	reg apply_d;
 	apply_d <= status[15];
-	if (status[15] && !apply_d) apply_reset_cnt <= 8'd255;
+	if (status[15] && !apply_d) begin
+		apply_reset_cnt <= 8'd255;
+		// Machine 1 is PAL; machines 0, 2 and 3 are NTSC. Capture this before
+		// machine_active is changed by the stretched Apply pulse.
+		apply_video_hard <= (machine_active == 2'd1) ^ (status[14:13] == 2'd1);
+	end
 	else if (apply_reset_cnt != 0) apply_reset_cnt <= apply_reset_cnt - 8'd1;
 end
 
@@ -375,7 +397,6 @@ end
 // gets, since the saved row can arrive after the boot firmware has already
 // released the CPU. The window is far shorter than a human can reach the
 // OSD, so staging is intact for the operator.
-reg [1:0] machine_active = 2'd0;
 reg [22:0] boot_follow_cnt = 23'd0;                  // ~0.6s at clk_sys
 wire       boot_follow = ~boot_follow_cnt[22];
 reg  [7:0] mach_reset_cnt = 8'd0;
@@ -392,6 +413,14 @@ always @(posedge clk_sys) begin
 	else if (mach_reset_cnt != 0) mach_reset_cnt <= mach_reset_cnt - 8'd1;
 end
 
+// CPU/machine reset includes both classes. Only hard sources reset video timing
+// and cpu_div; therefore a hard source always dominates if reset causes overlap.
+wire hard_reset = RESET | status[0] | buttons[1] | hard_reset_hold | ~rom_loaded | mach_reset |
+                  (download_reset && !download_soft) | (apply_reset && apply_video_hard);
+wire soft_reset = clear_request | (download_reset && download_soft) | (apply_reset && !apply_video_hard);
+wire reset       = hard_reset | soft_reset;
+wire video_reset = hard_reset;
+
 //////////////////////////////////////////////////////////////////
 
 wire HBlank;
@@ -406,6 +435,7 @@ rcastudioii rcastudio
 (
 	.clk_sys(clk_sys),
 	.reset(reset),
+	.video_reset(video_reset),
 	
 	.ioctl_download(ioctl_download),
 	.ioctl_index(ioctl_index),
