@@ -112,9 +112,6 @@ rcastudioii rcastudio
 (
 	.clk_sys(clk_48),
 	.reset(reset),
-	// Match the FPGA top's original CLEAR carve-out: downloads restart video
-	// timing, while CLEAR resets the machine without interrupting raster sync.
-	.video_reset(ioctl_download),
 	
 	.ioctl_download(ioctl_download),
 	.ioctl_index(ioctl_index),
