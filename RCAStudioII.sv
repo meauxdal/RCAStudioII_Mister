@@ -666,8 +666,8 @@ wire [1:0] ar = status[122:121];
 wire       is_pal = (machine_active == 2'd1);
 
 wire scale_active = |status[12:11];
-wire [11:0] arx_val = (scale_active || ar == 2'd0) ? 12'd13 : {10'd0, ar - 1'd1};
-wire [11:0] ary_val = (scale_active || ar == 2'd0) ? 12'd8  : 12'd0;
+wire [11:0] arx_val = (scale_active || ar == 2'd0) ? 12'd4 : {10'd0, ar - 1'd1};
+wire [11:0] ary_val = (scale_active || ar == 2'd0) ? 12'd3  : 12'd0;
 
 video_freak video_freak
 (
