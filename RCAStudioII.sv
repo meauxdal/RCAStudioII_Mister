@@ -371,6 +371,7 @@ reg [1:0] machine_active = 2'd0;
 reg [7:0] apply_reset_cnt;
 reg       apply_video_hard = 1'b0;
 wire      apply_reset = apply_reset_cnt != 0;
+wire      apply_crossing_now = (machine_active == 2'd1) ^ (status[14:13] == 2'd1);
 always @(posedge CLK_50M) begin
 	reg apply_d;
 	apply_d <= status[15];
@@ -378,7 +379,7 @@ always @(posedge CLK_50M) begin
 		apply_reset_cnt <= 8'd255;
 		// Machine 1 is PAL; machines 0, 2 and 3 are NTSC. Capture this before
 		// machine_active is changed by the stretched Apply pulse.
-		apply_video_hard <= (machine_active == 2'd1) ^ (status[14:13] == 2'd1);
+		apply_video_hard <= apply_crossing_now;
 	end
 	else if (apply_reset_cnt != 0) apply_reset_cnt <= apply_reset_cnt - 8'd1;
 end
@@ -414,11 +415,17 @@ always @(posedge clk_sys) begin
 	else if (mach_reset_cnt != 0) mach_reset_cnt <= mach_reset_cnt - 8'd1;
 end
 
+// A standard crossing must be hard from the initiating Apply edge, before the
+// stretched classification latch can become visible. The latch then retains it
+// after machine_active changes and apply_crossing_now naturally goes false.
+wire apply_hard_reset = (status[15] && apply_crossing_now) || (apply_reset && apply_video_hard);
+wire apply_soft_reset = apply_reset && !apply_hard_reset;
+
 // CPU/machine reset includes both classes. Only hard sources reset video timing
 // and cpu_div; therefore a hard source always dominates if reset causes overlap.
 wire hard_reset = RESET | status[0] | buttons[1] | hard_reset_hold | ~rom_loaded | mach_reset |
-                  (download_reset && !download_soft) | (apply_reset && apply_video_hard);
-wire soft_reset = clear_request | (download_reset && download_soft) | (apply_reset && !apply_video_hard);
+                  (download_reset && !download_soft) | apply_hard_reset;
+wire soft_reset = clear_request | (download_reset && download_soft) | apply_soft_reset;
 wire reset       = hard_reset | soft_reset;
 wire video_reset = hard_reset;
 
