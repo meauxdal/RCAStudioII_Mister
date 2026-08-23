@@ -104,6 +104,17 @@ end
 
 wire reset = ioctl_download | clear_key;
 
+// Model the FPGA top's bounded hard-video-reset pulse. The machine can remain
+// reset for the whole transfer, but raster timing resumes independently.
+reg       ioctl_download_d = 1'b0;
+reg [7:0] video_reset_cnt  = 8'd0;
+always @(posedge clk_48) begin
+	ioctl_download_d <= ioctl_download;
+	if (ioctl_download && !ioctl_download_d) video_reset_cnt <= 8'd255;
+	else if (video_reset_cnt != 0)            video_reset_cnt <= video_reset_cnt - 8'd1;
+end
+wire video_reset = video_reset_cnt != 0;
+
 wire key_strobe = old_keystb ^ ps2_key[10];
 reg old_keystb = 0;
 always @(posedge clk_48) old_keystb <= ps2_key[10];
@@ -112,9 +123,7 @@ rcastudioii rcastudio
 (
 	.clk_sys(clk_48),
 	.reset(reset),
-	// Match the FPGA top's original CLEAR carve-out: downloads restart video
-	// timing, while CLEAR resets the machine without interrupting raster sync.
-	.video_reset(ioctl_download),
+	.video_reset(video_reset),
 	
 	.ioctl_download(ioctl_download),
 	.ioctl_index(ioctl_index),

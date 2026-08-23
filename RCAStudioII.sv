@@ -427,7 +427,20 @@ wire hard_reset = RESET | status[0] | buttons[1] | hard_reset_hold | ~rom_loaded
                   (download_reset && !download_soft) | apply_hard_reset;
 wire soft_reset = clear_request | (download_reset && download_soft) | apply_soft_reset;
 wire reset       = hard_reset | soft_reset;
-wire video_reset = hard_reset;
+
+// Reset the video counters once at the beginning of a hard-reset event, then
+// release them after a bounded interval even if the CPU must remain held (for
+// example while Main is still loading boot firmware). A level-sensitive video
+// reset can otherwise suppress HSync/VSync indefinitely and leave HDMI unable
+// to lock. New hard events, including PAL/NTSC crossings, start a fresh pulse.
+reg       hard_reset_d    = 1'b0;
+reg [7:0] video_reset_cnt = 8'd0;
+always @(posedge clk_sys) begin
+	hard_reset_d <= hard_reset;
+	if (hard_reset && !hard_reset_d) video_reset_cnt <= 8'd255;
+	else if (video_reset_cnt != 0)   video_reset_cnt <= video_reset_cnt - 8'd1;
+end
+wire video_reset = video_reset_cnt != 0;
 
 //////////////////////////////////////////////////////////////////
 
