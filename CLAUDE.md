@@ -19,7 +19,7 @@ All functionality that can currently be exercised has passed hardware testing. A
 
 ## Non-negotiable repository rules
 
-- **Never modify `sys/`, including `video_freak.sv`, `video_mixer.sv`, `hps_io.sv`, etc. Fix integration in the top level/core RTL.
+- **Never modify `sys/`, including `video_freak.sv`, `video_mixer.sv`, `hps_io.sv`, etc.** Fix integration in the top level/core RTL.
 - Quartus 17.0.x only.
 - After changing RAM ports, verify the memory still infers as block RAM in `output_files/RCAStudioII.map.rpt`.
 - When changing video/timing, state the hardware/emulator reference used.
@@ -134,7 +134,7 @@ During a sync-preserving reset:
 - 1861/1864 raster counters keep running;
 - `cpu_div` keeps counting so the CPU machine-cycle grid stays phase-coherent with the live raster.
 
-Download type is latched through the post-download hold because `ioctl_index` is meaningful only during the transfer. Apply/reset captures whether the requested machine crosses PAL/NTSC before `machine_active` changes. Hard reset sources always dominate if reset causes overlap.
+Download type is latched through the post-download hold because `ioctl_index` is meaningful only during the transfer. Apply/reset captures whether the requested machine crosses PAL/NTSC before `machine_active` changes. `apply_reset_cnt` and both Apply edge-history registers are explicitly initialized because they participate in reset classification at startup. Hard reset sources always dominate if reset causes overlap.
 
 CLEAR is normal Studio software operation, not merely a developer reset. Its established special case also leaves the Studio III tone generator running; other sync-preserving resets reset the tone state while retaining raster timing.
 
@@ -273,6 +273,8 @@ Useful regressions include:
 
 The Verilator targets live in `verilator/`. If RTL changes appear to have no effect, clean `obj_dir`/`obj_dir_headless`; the Makefile has historically allowed stale generated builds.
 
+The current Verilator harness instantiates `rtl/rcastudioii.sv` directly rather than the MiSTer top level. It therefore does not exercise HPS boot ordering, saved-machine boot-follow, `ioctl_index` reset classification, Apply classification or overlapping top-level reset sources. In `verilator/sim.v`, `video_reset` is tied to `ioctl_download`, so every simulated download restarts raster timing; the harness can verify the core reset interface and CLEAR behaviour, but it cannot prove F1/F2 or Apply sync preservation. Keep every core-port change synchronized with all simulation instantiations.
+
 ## References
 
 Use more than one source when timing is ambiguous.
@@ -287,6 +289,6 @@ Use more than one source when timing is ambiguous.
 
 ## Credits / provenance
 
-The original core is by Jason Coombes, with MiSTer integration and early Pixie work by Flandango. Alan Steremberg and Elle Ball carried the later 2026 CPU/DMA/video, machine-support, controller/profile, OSD and hardware-testing work. See `Readme.md` for the user-facing credits.
+The original core is by Jason Coombes, with MiSTer integration and early Pixie work by Flandango. Alan Steremberg carried the later 2026 CPU/DMA/video and machine-support work. Elle Ball contributed joystick profiles, OSD tuning and enhancements, and extensive software and hardware testing. See `Readme.md` for the user-facing credits.
 
 GPL-2.0-or-later. Eric Smith's GPL-3 reference files under `rtl/reference` / `rtl/cosmac.v` are reference material and are not part of the compiled core.

@@ -13,9 +13,8 @@ MiSTer FPGA core for the **RCA Studio II** (1977), with support for the Studio I
 
 ### Known issues / open verification
 
-- Visicom software can behave unexpectedly (visual glitches, hanging) when pressing certain keys at game start. It is not currently determined if this is hardware accurate behavior. All Visicom software can be played without issue by pressing an intended game start key. Graphical corruptions can be cleared via `Clear` or `Reset and close OSD`.
-- The Studio II (Alt) and Studio III (4KB) BIOS dumps show a horizontal line at the bottom of the visible area. It is not currently determined if this is hardware-accurate behavior.
-- Beeper frequency needs additional fine tuning. The core currently starts somewhere around 300 Hz (and decays instantly). Tuning a real hardware recording against a digital piano reveals the starting pitch should be closer to Eb4 (311.127 Hz) and the pitch decay profile should be delayed subtly. There also appears to be more variance in the hardware pitch decay than in the core.
+- Visicom software can behave unexpectedly (visual glitches, hanging) when pressing certain keys at game start. It is not currently determined if this is hardware accurate behavior. All Visicom software can be played without issue by pressing an intended game start key while the core is fresly loaded. Unresponsive states can be cleared by reloading the core if needed.
+- Beeper frequency needs additional fine tuning. The core currently starts somewhere around 300 Hz (and decays instantly). Tuning a real hardware recording against a digital piano reveals the starting pitch should be closer to Eb4 (311.127 Hz) and the pitch decay profile should be delayed subtly. 
 - Direct video should work but has not yet been tested at time of writing.
 - Not every game and mode has an automap profile, and not all known software is present in the hash table.
 
