@@ -70,7 +70,7 @@ set_global_assignment -name VERILOG_MACRO "MISTER_DIRECT_VIDEO=1"
 #use only 1MB per frame for scaler to free ~21MB DDR3 RAM
 #set_global_assignment -name VERILOG_MACRO "MISTER_SMALL_VBUF=1"
 
-# Generates build_id.v (`BUILD_DATE), which RCAStudioII.sv includes for the OSD version string.
+# Generates build_id.v (`BUILD_DATE), which Studio-II.sv includes for the OSD version string.
 # Without this hook Analysis & Synthesis fails with "can't open Verilog Design File build_id.v".
 
 source sys/sys.tcl
@@ -233,7 +233,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/rcastudioii.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/dpram.sv
 set_global_assignment -name VERILOG_FILE rtl/cdp1802.v
 set_global_assignment -name SDC_FILE RCAStudioII.sdc
-set_global_assignment -name SYSTEMVERILOG_FILE RCAStudioII.sv
+set_global_assignment -name SYSTEMVERILOG_FILE Studio-II.sv
 set_global_assignment -name VERILOG_FILE rtl/pixie/cdp1861.v
 set_global_assignment -name VERILOG_FILE rtl/pixie/pixie_video.v
 set_instance_assignment -name FAST_INPUT_REGISTER ON -to SDRAM_DQ[*]

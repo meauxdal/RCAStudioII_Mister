@@ -89,7 +89,7 @@ expect, not a report.
 
 ### How the signal gets out
 
-`RCAStudioII.sv` wires:
+`Studio-II.sv` wires:
 
 ```
 CLK_VIDEO  = clk_sys                (7.04 MHz)

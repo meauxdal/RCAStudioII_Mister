@@ -27,7 +27,7 @@ All functionality that can currently be exercised has passed hardware testing. A
 
 ## Top-level architecture
 
-`RCAStudioII.sv` is the MiSTer `emu` top. `rtl/rcastudioii.sv` contains the CPU, machine memory maps, keypad/controller mapping and machine video selection.
+`Studio-II.sv` is the MiSTer `emu` top. `rtl/rcastudioii.sv` contains the CPU, machine memory maps, keypad/controller mapping and machine video selection.
 
 Important live video modules:
 
