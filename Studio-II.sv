@@ -701,7 +701,6 @@ video_mixer #(.LINE_LENGTH(352), .GAMMA(1)) video_mixer
 );
 
 wire [1:0] ar = status[122:121];
-wire       is_pal = (machine_active == 2'd1);
 
 // The raster's final DE falling edge coincides with the VSync rising edge.
 // video_freak handles both in one clocked block, where its later DE-edge count

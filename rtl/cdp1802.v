@@ -208,7 +208,7 @@ module cdp1802 (
       // branch sent C4 NOP through a taken branch -- Race executes C4 in its
       // custom ISR and sailed into open bus.
       {4'hc, 4'b?1??}: state_n = LSKIP;               // long skip, second cycle next
-      8'hc?:    state_n = take ? BRANCH3 : SKIP;      // long branch takes 3 cycles
+      {4'hc, 4'b?0??}: state_n = take ? BRANCH3 : SKIP; // long branch takes 3 cycles
       default:  state_n = next_cycle;                 // everything else is 2
       endcase
     BRANCH3:    state_n = next_cycle;
@@ -295,7 +295,7 @@ module cdp1802 (
       8'h3?:                        {action, Rwd} = {P, MEM_RD, take ? {R[P][15:8], ram_q}
                                                                      : (R[P] + 16'd1)};
       8'h7c, 8'h7d, 8'h7f, 8'hf8, 8'hf9, 8'hfa, 8'hfb, 8'hfc, 8'hfd, 8'hff,
-      8'hc?:                        {action, Rwd} = {P, MEM_RD, R[P] + 16'd1};
+      {4'hc, 4'b?0??}:              {action, Rwd} = {P, MEM_RD, R[P] + 16'd1};
 
       default:                      {action, Rwd} = {X, MEM_RD, R[X]};
       endcase
