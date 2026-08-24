@@ -671,7 +671,11 @@ int main(int argc, char** argv) {
     top->players = players_mode;
 
     IoctlDriver io;
-    io.add(bios, 0);
+    // The firmware goes into the selected machine's boot slot, exactly as
+    // MiSTer's bootN.rom autoload does: index[5:0]=0 with the slot in [7:6].
+    // Loading with a flat index 0 would land every machine's BIOS in the
+    // Studio II BRAM and machines 1-3 would boot from an empty ROM.
+    io.add(bios, machine << 6);
     if (!cart.empty()) io.add(cart, 1);
 
     FrameGrabber fg;
@@ -716,7 +720,9 @@ int main(int argc, char** argv) {
             machine_at_done = true;
         }
         if (!swap0_done && swap0_frame >= 0 && fg.frame >= swap0_frame) {
-            io.add(swap0_file, 0);
+            // Firmware swaps target whichever machine is selected *now*, so a
+            // --machine-at that already fired routes the file to that slot.
+            io.add(swap0_file, (int)top->machine << 6);
             io.finished = false;
             swap0_done = true;
         }

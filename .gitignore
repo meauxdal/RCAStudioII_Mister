@@ -61,17 +61,9 @@ output_files/
 # hardware capture videos used for accuracy checks (large, local reference)
 refvideo/
 
-# Local reference material dropped in the tree, none of it ours to redistribute
-# and all of it far too big for git. "RCA Technical docs.zip" is ~220 MB, which
-# GitHub would reject outright (100 MB hard limit) -- it got swept into a commit
-# once by a `git add -A` before this rule existed. Its unpacked form lives in
-# docs/rca-technical/, ignored for the same reason: docs/ is tracked, so an
-# unpacked archive in there is one careless `add -A` from being committed.
+# Local reference material (large, not part of the core)
 /*.zip
 docs/rca-technical/
-/dse
-RCAStudioII.dse
-dse_local_job_24632.log
 out/
 
 # tools/refemu is the vendored reference emulator (MIT) -- tracked on purpose,
@@ -80,3 +72,8 @@ tools/refemu/studio2_headless
 tools/refemu/studio2
 tools/refemu/*.o
 tools/refemu/out/
+
+# Elle's ignores (Quartus Design Space Explorer files)
+/dse
+RCAStudioII.dse
+*.log

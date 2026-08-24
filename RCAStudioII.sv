@@ -206,14 +206,18 @@ assign BUTTONS = 0;
 
 `include "build_id.v"
 localparam CONF_STR = {
-	"RCA-StudioII;v5;",
+	"RCA-StudioII;v6;",
 	"F1,ST2BINROM,Load Cartridge;",
+	// Index 2, not 0: menu loads carry the picked file's *extension* index in
+	// ioctl_index[7:6] (BIN=0, ROM=1), which collides with the bootN.rom slot
+	// numbering -- an F0 menu load of a .rom landed in the Studio III PAL BRAM.
+	// On index 2 the core can tell menu firmware apart from boot autoload and
+	// route it to the selected machine's slot (rtl/rcastudioii.sv).
+	"F2,BINROM,Load Firmware;",
 	"-;",
-	// Must load valid firmware after switching machine. The two Studio IIIs are
-	// different chipsets, not one part with two sets of timings: PAL is a CDP1864,
-	// NTSC is a CDP1861 with a CDP1862 for colour and a CDP1863 for tone.
+	// Machine is staged; nothing changes until Apply is pressed
 	"O[14:13],Machine,Studio II,Studio III PAL,Studio III NTSC,Visicom;",
-	"F0,BINROM,Load Firmware;",
+	"R[15],Apply and reset;",
 	"-;",
 	"O[6],Mapping,Auto,Manual;",
 	// Order must match the localparams in rtl/rcastudioii.sv
@@ -322,19 +326,108 @@ wire ce_pix = (ce_cnt == 2'd0);
 wire joy_clear = joystick_0[7] | joystick_1[7];
 wire clear_request = status[1] | clear_key | joy_clear;
 
-wire reset = RESET | status[0] | clear_request | buttons[1] | ioctl_download | download_reset | ~rom_loaded;
+// F1/F2 are user-initiated reloads of the active machine and preserve raster
+// timing. Boot firmware (index 0) and unknown downloads remain hard-reset
+// events. Keep the class latched through the post-download hold because
+// ioctl_index is only meaningful during the transfer.
+wire      user_download_now = (ioctl_index[5:0] == 6'd1) || (ioctl_index[5:0] == 6'd2);
+reg       download_soft_latched = 1'b0;
+reg [7:0] download_reset_cnt = 8'd0;
+wire      download_reset = ioctl_download | (download_reset_cnt != 0);
+wire      download_soft = ioctl_download ? user_download_now : download_soft_latched;
 
-// reset after download
-reg [7:0] download_reset_cnt;
-wire download_reset = download_reset_cnt != 0;
+// RESET / Reset-and-close-OSD / MiSTer user reset are always hard and get their
+// own hold. Do not reuse the download counter: doing so lets stale download
+// classification leak into unrelated reset sources.
+reg [7:0] hard_reset_cnt = 8'd0;
+wire      hard_reset_hold = hard_reset_cnt != 0;
+reg       rom_loaded = 0;
 
 always @(posedge CLK_50M) begin
-	if(ioctl_download || status[0] || buttons[1] || RESET ) download_reset_cnt <= 8'd255;
-	else if(download_reset_cnt != 0) download_reset_cnt <= download_reset_cnt - 8'd1;
-	if(ioctl_download && ioctl_index[5:0] == 0 && ioctl_addr == 24'd100) rom_loaded <= 1'b1;
+	if (ioctl_download) begin
+		download_reset_cnt <= 8'd255;
+		download_soft_latched <= user_download_now;
+	end
+	else if (download_reset_cnt != 0) download_reset_cnt <= download_reset_cnt - 8'd1;
+
+	if (RESET || status[0] || buttons[1]) hard_reset_cnt <= 8'd255;
+	else if (hard_reset_cnt != 0) hard_reset_cnt <= hard_reset_cnt - 8'd1;
+
+	if(ioctl_download && (ioctl_index[5:0] == 0 || ioctl_index[5:0] == 2) && ioctl_addr == 24'd100) rom_loaded <= 1'b1;
 end
 
-reg rom_loaded = 0;
+////////////////// Machine select: staged, applied on request ////////////////
+//
+// status[14:13] (the OSD "Machine" row) is only the operator's pending
+// pick here -- fed nowhere else in this block. "Apply" is R[15], status
+// bit 15. R[15] is a
+// momentary status bit like R[0] ("Reset and close OSD"), so a plain
+// CLK_50M edge-detect + hold, same shape as download_reset_cnt above, both
+// stretches it long enough to certainly register in clk_sys (which the PLL
+// derives from CLK_50M with no fixed phase relationship, so a single
+// CLK_50M-wide pulse is not safe to sample directly over there) and gives
+// the reset itself the same duration a download's reset gets.
+reg [1:0] machine_active = 2'd0;
+reg [7:0] apply_reset_cnt = 8'd0;
+reg       apply_video_hard = 1'b0;
+wire      apply_reset = apply_reset_cnt != 0;
+wire      apply_crossing_now = (machine_active == 2'd1) ^ (status[14:13] == 2'd1);
+always @(posedge CLK_50M) begin
+	reg apply_d = 1'b0;
+	apply_d <= status[15];
+	if (status[15] && !apply_d) begin
+		apply_reset_cnt <= 8'd255;
+		// Machine 1 is PAL; machines 0, 2 and 3 are NTSC. Capture this before
+		// machine_active is changed by the stretched Apply pulse.
+		apply_video_hard <= apply_crossing_now;
+	end
+	else if (apply_reset_cnt != 0) apply_reset_cnt <= apply_reset_cnt - 8'd1;
+end
+
+// Latched on apply_reset's rising edge in the clk_sys domain -- safe to
+// edge-detect because apply_reset is already stretched to 255 CLK_50M
+// cycles, comfortably wider than one clk_sys period. This register, not
+// status[14:13], is what actually reaches the core and the Visicom palette
+// mux below, so nothing about the memory map, video chipset or colour RAM
+// reconfigures until the operator asks for it.
+//
+// The one exception is saved-config restore at boot. Main delivers status while
+// it is also autoloading the boot ROMs, so changing machine_active immediately
+// can reconfigure the active machine in the middle of firmware/reset startup.
+// Keep the known Studio II power-up selection for the ~0.6s boot window, then
+// apply Main's final saved value exactly once under the normal stretched reset.
+// The window is far shorter than a human can reach the OSD, so staging remains
+// intact for the operator.
+reg [22:0] boot_follow_cnt = 23'd0;                  // ~0.6s at clk_sys
+wire       boot_follow = ~boot_follow_cnt[22];
+reg  [7:0] mach_reset_cnt = 8'd0;
+wire       mach_reset = mach_reset_cnt != 0;
+always @(posedge clk_sys) begin
+	reg apply_reset_d = 1'b0;
+	apply_reset_d <= apply_reset;
+	if (boot_follow) boot_follow_cnt <= boot_follow_cnt + 23'd1;
+	if (apply_reset && !apply_reset_d) machine_active <= status[14:13];
+	if (boot_follow && (boot_follow_cnt == 23'h3FFFFF) &&
+	    (machine_active != status[14:13])) begin
+		machine_active <= status[14:13];
+		mach_reset_cnt <= 8'd255;
+	end
+	else if (mach_reset_cnt != 0) mach_reset_cnt <= mach_reset_cnt - 8'd1;
+end
+
+// A standard crossing must be hard from the initiating Apply edge, before the
+// stretched classification latch can become visible. The latch then retains it
+// after machine_active changes and apply_crossing_now naturally goes false.
+wire apply_hard_reset = (status[15] && apply_crossing_now) || (apply_reset && apply_video_hard);
+wire apply_soft_reset = apply_reset && !apply_hard_reset;
+
+// CPU/machine reset includes both classes. Only hard sources reset video timing
+// and cpu_div; therefore a hard source always dominates if reset causes overlap.
+wire hard_reset = RESET | status[0] | buttons[1] | hard_reset_hold | ~rom_loaded | mach_reset |
+                  (download_reset && !download_soft) | apply_hard_reset;
+wire soft_reset = clear_request | (download_reset && download_soft) | apply_soft_reset;
+wire reset       = hard_reset | soft_reset;
+wire video_reset = hard_reset;
 
 //////////////////////////////////////////////////////////////////
 
@@ -350,6 +443,7 @@ rcastudioii rcastudio
 (
 	.clk_sys(clk_sys),
 	.reset(reset),
+	.video_reset(video_reset),
 	
 	.ioctl_download(ioctl_download),
 	.ioctl_index(ioctl_index),
@@ -371,7 +465,7 @@ rcastudioii rcastudio
 	.joystick_0(joystick_0),
 	.joystick_1(joystick_1),
 	.joy_override(status[5:2]),
-	.machine(status[14:13]),
+	.machine(machine_active),
 	.video_bg(video_bg),
 	.joy_manual(status[6]),
 	.auto_profile(auto_profile),
@@ -419,8 +513,10 @@ always @(posedge clk_sys) begin
 	// Schedule exactly one write on initial Auto mode, a new detection, or a
 	// Manual-to-Auto transition. Do not test whether the row is stale here: that
 	// would reload the delay on every clock and prevent the write from firing.
-	if ((!auto_sync_done && !status[6]) || (auto_profile != auto_d) ||
-	    (manual_d && !status[6])) begin
+	// Gated by !boot_follow so initial status writeback only happens after Main
+	// has delivered saved settings.
+	if (!boot_follow && ((!auto_sync_done && !status[6]) || (auto_profile != auto_d) ||
+	    (manual_d && !status[6]))) begin
 		auto_sync_done <= 1'b1;
 		push_pending <= 1'b1;
 		// ~0.3 s at 7.04 MHz. map_profile only settles when the transfer ends,
@@ -430,7 +526,7 @@ always @(posedge clk_sys) begin
 	else if (|push_dly) begin
 		push_dly <= push_dly - 1'b1;
 	end
-	else if (push_pending && !status[6] && !ioctl_download) begin
+	else if (push_pending && !status[6] && !ioctl_download && !boot_follow) begin
 		push_pending <= 1'b0;
 		status_in    <= {status[127:6], auto_profile, status[1:0]};
 		status_set   <= 1'b1;
@@ -442,7 +538,22 @@ end
 // bit of the Joystick O[5:2] option.
 assign status_menumask = (!status[6]) ? 16'h0004 : 16'h0000;
 
-assign CLK_VIDEO = clk_sys;
+// The scaler needs more to work with than the native raster: 88 active pixels
+// at a 1.76 MHz CE_PIXEL asks it for a ~14x horizontal blow-up, and that is
+// what broke the Scale modes (anything but Original lost sync). So the video
+// chain runs on the PLL's 42.24 MHz output -- exactly 6x clk_sys, same VCO, so
+// the domains are phase-locked and the /6 enable below lands on a fixed phase
+// -- and samples the core's pixel stream at 7.04 MHz. Each 1861 pixel is
+// thereby repeated 4x: the line becomes 352 wide, the scaler does ~3.5x, and
+// the scandoubler keeps the 4x enable headroom video_mixer's header asks for.
+assign CLK_VIDEO = clk_vid;
+
+reg  [2:0] ce_vid_cnt = 3'd0;
+reg        ce_pix_vid = 1'b0;
+always @(posedge clk_vid) begin
+	ce_vid_cnt <= (ce_vid_cnt == 3'd5) ? 3'd0 : ce_vid_cnt + 3'd1;
+	ce_pix_vid <= (ce_vid_cnt == 3'd5);
+end
 
 // The core hands up {R,G,B}, one bit per channel, mirroring the CDP1864's three
 // colour pins. The Studio II's 1861 is monochrome and drives all three together,
@@ -471,7 +582,7 @@ wire [7:0] vid_lvl = video_bg ? 8'h80 : 8'hFF;
 // So these are MAME's. The capture is a composite NTSC encode and its absolute
 // levels are not trustworthy, but the *hue* of colour 1 is not a capture
 // artefact: green-cyan and blue-cyan are not the same colour.
-wire machine_visicom = (status[14:13] == 2'd3);
+wire machine_visicom = (machine_active == 2'd3);
 reg [23:0] vis_rgb;
 always @(*) begin
 	case (vis_index)
@@ -547,21 +658,38 @@ wire [9:0] osk_b = (osk_mode == 2'd2) ? osk_keys : 10'd0;
 wire       vga_de;
 wire       freeze_sync;
 
-video_mixer #(.LINE_LENGTH(140), .GAMMA(1)) video_mixer
+// Resample the clk_sys-domain pixel stream (numstick overlay included) into
+// the clk_vid domain. Plain registers: the clocks share a PLL, so this is an
+// ordinary timed path, and sampling at 42 MHz then presenting on the 7.04 MHz
+// enable repeats each source pixel 4x. LINE_LENGTH follows the active width,
+// 88 -> 352.
+reg [7:0] vmix_r, vmix_g, vmix_b;
+reg       vmix_hs, vmix_vs, vmix_hb, vmix_vb;
+always @(posedge clk_vid) begin
+	vmix_r  <= osk_vr;
+	vmix_g  <= osk_vg;
+	vmix_b  <= osk_vb;
+	vmix_hs <= HSync;
+	vmix_vs <= VSync;
+	vmix_hb <= HBlank;
+	vmix_vb <= VBlank;
+end
+
+video_mixer #(.LINE_LENGTH(352), .GAMMA(1)) video_mixer
 (
 	.CLK_VIDEO(CLK_VIDEO),
 	.CE_PIXEL(CE_PIXEL),
-	.ce_pix(ce_pix),
+	.ce_pix(ce_pix_vid),
 	.scandoubler(forced_scandoubler),
 	.hq2x(1'b0),
 	.gamma_bus(gamma_bus),
-	.R(osk_vr),
-	.G(osk_vg),
-	.B(osk_vb),
-	.HSync(HSync),
-	.VSync(VSync),
-	.HBlank(HBlank),
-	.VBlank(VBlank),
+	.R(vmix_r),
+	.G(vmix_g),
+	.B(vmix_b),
+	.HSync(vmix_hs),
+	.VSync(vmix_vs),
+	.HBlank(vmix_hb),
+	.VBlank(vmix_vb),
 	.HDMI_FREEZE(HDMI_FREEZE),
 	.freeze_sync(freeze_sync),
 	.VGA_R(VGA_R),
@@ -573,22 +701,37 @@ video_mixer #(.LINE_LENGTH(140), .GAMMA(1)) video_mixer
 );
 
 wire [1:0] ar = status[122:121];
+wire       is_pal = (machine_active == 2'd1);
+
+// The raster's final DE falling edge coincides with the VSync rising edge.
+// video_freak handles both in one clocked block, where its later DE-edge count
+// can overwrite the VSync reset and corrupt the measured frame height. Present
+// VSync one output pixel later so those events are handled on separate enables.
+reg vf_vs = 1'b0;
+always @(posedge CLK_VIDEO) begin
+	if (CE_PIXEL) vf_vs <= VGA_VS;
+end
+
+wire scale_active = |status[12:11];
+wire [11:0] arx_val = (scale_active || ar == 2'd0) ? 12'd4 : {10'd0, ar - 1'd1};
+wire [11:0] ary_val = (scale_active || ar == 2'd0) ? 12'd3  : 12'd0;
+
 video_freak video_freak
 (
-	.CLK_VIDEO(CLK_VIDEO),
-	.CE_PIXEL(CE_PIXEL),
-	.VGA_VS(VGA_VS),
-	.HDMI_WIDTH(HDMI_WIDTH),
-	.HDMI_HEIGHT(HDMI_HEIGHT),
-	.VGA_DE(VGA_DE),
-	.VIDEO_ARX(VIDEO_ARX),
-	.VIDEO_ARY(VIDEO_ARY),
-	.VGA_DE_IN(vga_de),
-	.ARX((!ar) ? 12'd4 : (ar - 1'd1)),
-	.ARY((!ar) ? 12'd3 : 12'd0),
+    .CLK_VIDEO(CLK_VIDEO),
+    .CE_PIXEL(CE_PIXEL),
+    .VGA_VS(vf_vs),
+    .HDMI_WIDTH(HDMI_WIDTH),
+    .HDMI_HEIGHT(HDMI_HEIGHT),
+    .VGA_DE(VGA_DE),
+    .VIDEO_ARX(VIDEO_ARX),
+    .VIDEO_ARY(VIDEO_ARY),
+    .VGA_DE_IN(vga_de),
+    .ARX(arx_val),
+    .ARY(ary_val),
 	.CROP_SIZE(12'd0),
 	.CROP_OFF(5'd0),
-	.SCALE({1'b0, status[12:11]})
+    .SCALE({1'b0, status[12:11]})
 );
 
 //reg  [26:0] act_cnt;
