@@ -135,7 +135,7 @@ Each of these has already cost someone a day.
    changing anything about a memory's ports, check it still appears in the
    `Inferred altsyncram megafunction` list in `output_files/*.map.rpt`.**
 
-4. **Quartus rewrites `RCAStudioII.qsf` on every build.** It breaks `git stash`
+4. **Quartus rewrites `Studio-II.qsf` on every build.** It breaks `git stash`
    around A/B builds, and `git add -A` after a build will sweep it into a commit.
    New sources belong in `files.qip` (and `verilator/Makefile`'s `V_SRC`), never
    the qsf, because the qsf is regenerated.

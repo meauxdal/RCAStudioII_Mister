@@ -247,9 +247,9 @@ Studio III NTSC uses the CDP1863 tone generator. Studio III PAL uses the CDP1864
 
 ## RC1 workflow
 
-All new work must start from `preserve-sync-soft-resets`, use a separate topic branch, and return through a pull request targeting `preserve-sync-soft-resets`. Do not base RC1 work on `main`, `merge-prep`, or an older reset branch.
+All new work must start from the current stable `master`, use a separate topic branch, and return through a pull request targeting `master`. The former development branches are stale and have been deleted.
 
-The current `releases/RCAStudioII_20260823.rbf` is the branch's tested release build. Replace or rename release artifacts deliberately when cutting RC1; do not treat the date-stamped file as an immutable source of truth.
+The current `releases/RCAStudioII_20260823.rbf` is the branch's tested pre-rename release build. New release builds use `Studio-II_YYYYMMDD.rbf`; replace release artifacts deliberately when cutting RC1, and do not treat any date-stamped file as an immutable source of truth.
 
 ## Build and regression
 

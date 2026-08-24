@@ -34,7 +34,7 @@ MiSTer FPGA core for the **RCA Studio II** (1977), with support for the Studio I
 
 Copy a release from `releases/` to e.g. `/media/fat/_Console/` on MiSTer.
 
-Firmware is not embedded. Put the BIOS files in `/media/fat/games/RCA-StudioII/` using the 
+Firmware is not embedded. Put the BIOS files in `/media/fat/games/Studio-II/` using the
 standard MiSTer boot slots:
 
 | Machine         | Boot slot / filename | Recommended BIOS image | Size | MD5                                |
@@ -101,10 +101,12 @@ In `Mapping: Auto`, the core computes a CRC16 of the cartridge and chooses a pro
 Quartus **17.0.x** only.
 
 ```sh
-tools/quartus-build.sh          # full build -> output_files/RCAStudioII.rbf
+tools/quartus-build.sh          # full build -> output_files/Studio-II.rbf
 tools/quartus-build.sh map      # analysis & synthesis only
 tools/quartus-build.sh clean
 ```
+
+Date-stamped release builds are named `Studio-II_YYYYMMDD.rbf`.
 
 Two Verilator targets live in `verilator/`:
 

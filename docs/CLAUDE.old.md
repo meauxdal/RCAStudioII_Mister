@@ -240,12 +240,12 @@ match the other.
 ## 4. Build & test
 
 ### Quartus
-Quartus **17.0.x** only (MiSTer requirement). Project `RCAStudioII.qpf`, top
+Quartus **17.0.x** only (MiSTer requirement). Project `Studio-II.qpf`, top
 entity `sys_top` (from `sys/`). Quartus is not installed natively here; it runs
 in the `raetro/quartus:mister` Docker image (Quartus 17.0.2):
 
 ```sh
-tools/quartus-build.sh          # full build -> output_files/RCAStudioII.rbf
+tools/quartus-build.sh          # full build -> output_files/Studio-II.rbf
 tools/quartus-build.sh map      # analysis & synthesis only (~1.5 min)
 tools/quartus-build.sh clean
 ```
@@ -273,7 +273,7 @@ helpers at ~4 % CPU. It looks like a slow build but never finishes. The script
 passes `--parallel=1` to each stage to avoid this; a healthy build sits at
 ~100 % CPU.
 
-`RCAStudioII.qsf` needs `PRE_FLOW_SCRIPT_FILE = quartus_sh:sys/build_id.tcl`;
+`Studio-II.qsf` needs `PRE_FLOW_SCRIPT_FILE = quartus_sh:sys/build_id.tcl`;
 without it synthesis dies on the missing generated `build_id.v`.
 
 ### Verilator sims (`verilator/`)
@@ -537,7 +537,7 @@ model does; the first three are directed tests and should not move at all.
 - Quartus 17.0.x. Do not edit anything under `sys/` — it is the shared MiSTer
   framework and is overwritten on updates.
 - Add new sources to `files.qip` by hand (Quartus writes them into
-  `RCAStudioII.qsf` instead; move them). Keep `verilator/Makefile`'s `V_SRC` in
+  `Studio-II.qsf` instead; move them). Keep `verilator/Makefile`'s `V_SRC` in
   sync with `files.qip`.
 - Keep the PLL in `rtl/pll*`; the framework requires it there.
 - Prefer deleting dead code over commenting it out. This tree is already hard to
