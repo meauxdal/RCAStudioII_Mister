@@ -19,8 +19,7 @@ All functionality that can currently be exercised has passed hardware testing. A
 
 ## Non-negotiable repository rules
 
-- **Never modify `sys/`, including `video_freak.sv`, `video_mixer.sv`, `hps_io.sv`, etc.** Fix integration in the top level/core RTL.
-- **Base all new work on `preserve-sync-soft-resets`.** Use a new topic branch and target its pull request back to `preserve-sync-soft-resets`.
+- **Never modify `sys/`, including `video_freak.sv`, `video_mixer.sv`, `hps_io.sv`, etc. Fix integration in the top level/core RTL.
 - Quartus 17.0.x only.
 - After changing RAM ports, verify the memory still infers as block RAM in `output_files/RCAStudioII.map.rpt`.
 - When changing video/timing, state the hardware/emulator reference used.
