@@ -4,7 +4,7 @@ Current engineering reference for this repository. Prefer current RTL and measur
 
 ## Current state
 
-The core is playable and supports four related machines:
+The core is preparing for RC1 and supports four related machines:
 
 | Machine | Video | Sound | Notes |
 |---|---|---|---|
@@ -15,11 +15,12 @@ The core is playable and supports four related machines:
 
 The CDP1802 implements the instruction set required by the software corpus, interrupts, DMA and machine-cycle timing. Video is DMA-driven; there is no framebuffer scraper. `.bin`/`.rom` and paged `.st2` cartridges work. Studio II RAM mirroring, Studio III colour RAM, Visicom RAM/plane layout, four resident BIOS slots, joystick automapping, numstick input, aspect ratio and integer scaling are implemented.
 
-Current hardware testing indicates the four machine modes and known software are broadly playable. Automatic joystick profiles work but still deserve cleanup/verification. Visicom has an unresolved intermittent startup/input issue described below.
+All functionality that can currently be exercised has passed hardware testing. All four machine modes work, all known titles are compatible, integer scaling works, and HDMI sync is preserved through CLEAR, cartridge/firmware reloads, and machine changes that remain within the same video standard. Remaining RC1 items are verification gaps, hardware-accuracy questions, and incomplete automap coverage rather than known general compatibility failures; see **RC1 known issues / open verification** below.
 
 ## Non-negotiable repository rules
 
 - **Never modify `sys/`, including `video_freak.sv`, `video_mixer.sv`, `hps_io.sv`, etc.** Fix integration in the top level/core RTL.
+- **Base all new work on `preserve-sync-soft-resets`.** Use a new topic branch and target its pull request back to `preserve-sync-soft-resets`.
 - Quartus 17.0.x only.
 - After changing RAM ports, verify the memory still infers as block RAM in `output_files/RCAStudioII.map.rpt`.
 - When changing video/timing, state the hardware/emulator reference used.
@@ -109,38 +110,40 @@ The current 1861 DMA timing includes the phase work needed by real software:
 - 192-line display area.
 - PAL ↔ NTSC machine changes are genuine timing-standard changes and may break display sync; this is accepted.
 
-## CLEAR, reset and future sync-preserving resets
+## Reset policy and sync preservation
 
-CLEAR is part of normal Studio software operation, not merely a developer reset. Some games effectively begin immediately after CLEAR, so dropping HDMI sync on every CLEAR makes them unpleasant or impossible to use normally.
+The reset policy is implemented and hardware-tested. CPU/machine reset and video-timing reset are deliberately separate: `reset` restarts machine state, while `video_reset` restarts raster counters and the CPU phase divider only for a hard reset.
 
-Current implementation resets the CPU while keeping Pixie timing alive:
+| Event | Reset class | Video behaviour |
+|---|---|---|
+| Initial core/FPGA load | Hard | raster timing restarts |
+| `Reset and close OSD` / MiSTer reset | Hard | raster timing restarts |
+| Automatic boot firmware load (index 0) or an unknown download | Hard | raster timing restarts |
+| Cartridge load (F1 / index 1) | Sync-preserving | raster remains live |
+| Manual `Load Firmware` (F2 / index 2) | Sync-preserving | raster remains live |
+| `Apply and reset` within the same standard | Sync-preserving | raster remains live |
+| PAL ↔ NTSC `Apply and reset` | Hard | timing standard changes; display resync is expected |
+| CLEAR (F3, OSD or gamepad Select) | Sync-preserving | raster remains live |
 
-- `clear_request` reaches the CPU reset path.
-- the 1861/1864 reset inputs exclude CLEAR (`reset & ~clear_key`);
-- display is forced off during CLEAR;
-- `cpu_div` continues counting through CLEAR so its machine-cycle grid stays phase-coherent with the live raster.
+Studio II, Studio III NTSC and Visicom are all NTSC and can therefore switch among one another without dropping HDMI sync. Studio III PAL is the only PAL mode, so entering or leaving it is a hard reset.
 
-This is shared by Studio II, Studio III NTSC and Visicom because all three use the same 1861 path. The existing DMA parity/reacquisition work is therefore applicable to all three.
+During a sync-preserving reset:
 
-Desired future reset policy:
+- the CPU and machine state reset;
+- the display is forced off;
+- cartridge/firmware downloads hold reset for the transfer plus the post-download stretch;
+- 1861/1864 raster counters keep running;
+- `cpu_div` keeps counting so the CPU machine-cycle grid stays phase-coherent with the live raster.
 
-**Full reset**
-- initial core/FPGA load;
-- PAL ↔ NTSC transition;
-- anything that genuinely changes the output timing standard.
+Download type is latched through the post-download hold because `ioctl_index` is meaningful only during the transfer. Apply/reset captures whether the requested machine crosses PAL/NTSC before `machine_active` changes. Hard reset sources always dominate if reset causes overlap.
 
-**Sync-preserving reset where possible**
-- cartridge load;
-- Apply and Reset when remaining within the same video standard;
-- normal user reset/CLEAR-style restart.
+CLEAR is normal Studio software operation, not merely a developer reset. Its established special case also leaves the Studio III tone generator running; other sync-preserving resets reset the tone state while retaining raster timing.
 
-For a sync-preserving reset, stop/reset CPU and machine state and blank the display, but keep raster counters, sync generation and the CPU phase divider running. Hold the machine reset through the cartridge download so code cannot execute while BRAM is being rewritten.
-
-This policy is not implemented for every reset source yet; do not confuse the existing CLEAR behaviour with completion of the broader reset-policy work.
+Hardware testing passes for the exercised CLEAR, cartridge load, manual firmware load and same-standard machine-switch paths. PAL ↔ NTSC transitions intentionally use the hard-reset path.
 
 ## Machine selection and BIOSes
 
-The OSD Machine field is staged. `machine_active` changes on **Apply and reset** (with a short boot-follow exception so Main can restore saved configuration during startup).
+The OSD Machine field is staged. `machine_active` changes on **Apply and reset** (with a short boot-follow exception so Main can restore saved configuration during startup). An apply within the current video standard uses the sync-preserving reset path; crossing between PAL and NTSC uses the hard-reset path.
 
 Four BIOS BRAMs are resident:
 
@@ -207,45 +210,47 @@ The Joystick row is disabled while Auto is active. The mapping itself does **not
 
 Profiles currently include None, Cross, Space War, Freeway, Bowling, Baseball, Homebrew, Gunfighter, 8-way, Doodle, 2P Homebrew, Clear-only and Paddle.
 
-### Profile caveats
+### Profile coverage
 
-Profiles are functional but still somewhat provisional. Hardware testing has shown occasional surprising OSD/profile selections. The readback mechanism itself is not presently the leading suspect.
+Known profile entries are functional, but the table is not complete: not every game/mode has an automap profile and not all known software is represented in the CRC table. Add hashes only when the exact image and controls are identified. Because CRCs cover exact downloaded bytes, list both `.bin` and `.st2` hashes where both containers are known.
 
-`MAP_CLEAR_ONLY` can currently be selected by its known CRC entries or by the built-in Addition game. Note that `playerA`/`playerB` key state is event-driven and should be considered when investigating unexpected built-in selection; stale held-key state across reset is a possible source of confusing observations.
+`MAP_CLEAR_ONLY` can be selected by its known CRC entries or by the built-in Addition game. `playerA`/`playerB` key state is event-driven, so stale held-key state across reset remains relevant when diagnosing an unexpected built-in selection.
 
-Also review the cartridge-download completion logic if profile state appears to survive unrelated ioctl activity: CRC accumulation is cart-gated, but profile update/reset semantics must remain cart-specific.
+Do not rewrite the profile table speculatively. Prefer exact game identification and verified controls.
 
-Do not rewrite the profile table speculatively. Prefer exact game identification and known controls.
-
-## Current unresolved hardware observations
+## RC1 known issues / open verification
 
 ### Visicom intermittent instability
 
-All dumped Visicom games have been observed working correctly and can play perfectly. However, on some starts/sessions a game becomes glitchy after a keypress or otherwise behaves incorrectly until some combination of CLEAR, Reset, cartridge reload or core reload is performed.
+All dumped Visicom games are playable. Some software can behave unexpectedly if certain keys are pressed at startup, including visual glitches or a hang. Pressing the intended game-start key avoids the problem; CLEAR or `Reset and close OSD` clears observed graphical corruption.
 
-Important facts:
-
-- This is intermittent rather than a deterministic incompatibility.
-- The same software can run flawlessly once it starts in a good state.
-- Current simulation/reference work does not establish what the real Visicom does during reset, cartridge insertion or initial display/CPU phase acquisition.
-
-Do not "fix" this by changing timing blindly. A real Visicom or a trustworthy hardware trace is the best next reference. Investigate reset/input state, phase/reacquisition and cartridge-start conditions before changing the two-plane renderer, since the renderer demonstrably produces correct gameplay in good sessions.
+It is not yet known whether this is hardware-accurate behaviour. Do not change timing blindly: a real Visicom or trustworthy hardware trace remains the best reference. Investigate reset/input state, phase/reacquisition and cartridge-start conditions before changing the two-plane renderer, which produces correct gameplay during normal operation.
 
 ### Bottom horizontal line on some BIOS/software
 
-A visible line has been observed at the bottom of the picture with some BIOS/software combinations, particularly the Studio III NTSC BIOS. It is not present with every BIOS/image.
+A visible line has been observed at the bottom of the picture with the Studio II alternate BIOS and Studio III 4 KB BIOS dumps. It is not present with every BIOS/image.
 
-Treat this as unresolved. Because it varies with software/BIOS, it may be authored behaviour or a consequence of how that BIOS drives display memory/timing rather than a universal raster bug. Compare Studio III NTSC against Paul Robson's emulator / other reference emulators and, ideally, real hardware before changing blanking or active geometry.
+Treat this as an open hardware-accuracy question. Because it varies with software/BIOS, it may be authored behaviour or a consequence of how that BIOS drives display memory/timing rather than a universal raster bug. Compare against reference emulators and, ideally, real hardware before changing blanking or active geometry.
+
+### Beeper tuning
+
+The Studio II beeper is functional but needs final tuning against real-hardware recordings. It currently begins around 300 Hz and decays immediately; the hardware reference is closer to E♭4 (311.127 Hz), with a subtly delayed and somewhat variable decay profile.
 
 ### Analog/direct video
 
-Implemented but not yet verified on real analog hardware.
+Implemented and expected to work, but not yet verified on real analog hardware.
 
 ## Sound
 
 Studio II uses the discrete beeper model, including the approximate NE555 pitch droop described by the hardware documentation.
 
 Studio III NTSC uses the CDP1863 tone generator. Studio III PAL uses the CDP1864-compatible divider path. Visicom has no Studio III tone hardware.
+
+## RC1 workflow
+
+All new work must start from `preserve-sync-soft-resets`, use a separate topic branch, and return through a pull request targeting `preserve-sync-soft-resets`. Do not base RC1 work on `main`, `merge-prep`, or an older reset branch.
+
+The current `releases/RCAStudioII_20260823.rbf` is the branch's tested release build. Replace or rename release artifacts deliberately when cutting RC1; do not treat the date-stamped file as an immutable source of truth.
 
 ## Build and regression
 
