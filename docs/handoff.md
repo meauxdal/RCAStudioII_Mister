@@ -135,7 +135,7 @@ Each of these has already cost someone a day.
    changing anything about a memory's ports, check it still appears in the
    `Inferred altsyncram megafunction` list in `output_files/*.map.rpt`.**
 
-4. **Quartus rewrites `RCAStudioII.qsf` on every build.** It breaks `git stash`
+4. **Quartus rewrites `Studio-II.qsf` on every build.** It breaks `git stash`
    around A/B builds, and `git add -A` after a build will sweep it into a commit.
    New sources belong in `files.qip` (and `verilator/Makefile`'s `V_SRC`), never
    the qsf, because the qsf is regenerated.
@@ -203,7 +203,7 @@ at +0.567 ns setup. Analog video (`docs/analog-video.md`) is the specific thing
 to check, plus audio by ear and the OSD profile write-back.
 
 **2. Embed the BIOS.** The core is held in reset until a BIOS is loaded from the
-OSD every boot (`RCAStudioII.sv`, `rom_loaded` latches on
+OSD every boot (`Studio-II.sv`, `rom_loaded` latches on
 `ioctl_index==0 && ioctl_addr==100`). `rom/studio2.rom` is already in the tree
 and `rom/studio2.hex` is the same 2 KB as hex text. This is the largest remaining
 piece of user-facing friction and is not technically hard. Note the other three

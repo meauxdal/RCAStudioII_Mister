@@ -56,7 +56,7 @@ module cdp1861
     // takes the top bit of each, so the picture is two bit planes 512 bytes
     // apart and every pixel is one of four colours instead of on/off. The
     // second plane arrives here as data_in2 and leaves as vis_index; the
-    // palette itself is not this part's business (see RCAStudioII.sv).
+    // palette itself is not this part's business (see Studio-II.sv).
     input             vis_mode,     // this machine is a Visicom
     input       [7:0] data_in2,     // the byte at M(R(0)+$200), same DMA cycle
     // CDP1862 colour, for the NTSC Studio III. That machine puts a separate

@@ -3,7 +3,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/dpram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/numstick.sv
 set_global_assignment -name VERILOG_FILE rtl/cdp1802.v
 set_global_assignment -name SDC_FILE RCAStudioII.sdc
-set_global_assignment -name SYSTEMVERILOG_FILE RCAStudioII.sv
+set_global_assignment -name SYSTEMVERILOG_FILE Studio-II.sv
 set_global_assignment -name VERILOG_FILE rtl/pixie/cdp1861.v
 set_global_assignment -name VERILOG_FILE rtl/pixie/cdp1864.v
 set_global_assignment -name VERILOG_FILE rtl/pixie/cdp1863.v

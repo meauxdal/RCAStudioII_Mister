@@ -202,7 +202,7 @@ DMA-OUT cycles.** The current core implements none of them (§6.1).
 ### Files actually compiled (`files.qip`)
 | File | Role |
 |------|------|
-| `RCAStudioII.sv` | MiSTer `emu` top: hps_io, PLL, OSD config string, video chain (video_mixer + video_freak), on-screen keypad |
+| `Studio-II.sv` | MiSTer `emu` top: hps_io, PLL, OSD config string, video chain (video_mixer + video_freak), on-screen keypad |
 | `rtl/rcastudioii.sv` | Core glue: CPU + pixie + memory decode + keypad + joystick profiles + cartridge loader |
 | `rtl/cdp1802.v` | The CPU: full BIOS instruction set, interrupts, DMA, machine-cycle timing |
 | `rtl/dpram.sv` | Dual-port block RAM — instantiated **three** times: the 4 KB ROM/cartridge image, the 512 B RAM, and the Visicom's 256 B second bit plane. Port B must stay tied off on any instance that has to infer as block RAM (§8) |
@@ -229,7 +229,7 @@ Note `rtl/pixie/cdp1861.v` is the *live* video module; the old
 ### Clocks
 `rtl/pll/pll_0002.v`: `outclk_0 = 7.040229 MHz` (`clk_sys`),
 `outclk_1 = 42.241379 MHz` (`clk_vid`, now unused). 7.040229 = 4 × 1.760229 MHz.
-`RCAStudioII.sv` divides `clk_sys` by 4 into the `ce_pix` enable — the 1.76 MHz
+`Studio-II.sv` divides `clk_sys` by 4 into the `ce_pix` enable — the 1.76 MHz
 pixel/CPU timebase everything inside `rcastudioii.sv` is gated on. The Verilator
 sim ties `ce_pix` high instead (one pixel per clock): frame contents are
 identical, the sim is just 4× cheaper per frame. Don't "fix" either side to
@@ -240,12 +240,12 @@ match the other.
 ## 4. Build & test
 
 ### Quartus
-Quartus **17.0.x** only (MiSTer requirement). Project `RCAStudioII.qpf`, top
+Quartus **17.0.x** only (MiSTer requirement). Project `Studio-II.qpf`, top
 entity `sys_top` (from `sys/`). Quartus is not installed natively here; it runs
 in the `raetro/quartus:mister` Docker image (Quartus 17.0.2):
 
 ```sh
-tools/quartus-build.sh          # full build -> output_files/RCAStudioII.rbf
+tools/quartus-build.sh          # full build -> output_files/Studio-II.rbf
 tools/quartus-build.sh map      # analysis & synthesis only (~1.5 min)
 tools/quartus-build.sh clean
 ```
@@ -273,7 +273,7 @@ helpers at ~4 % CPU. It looks like a slow build but never finishes. The script
 passes `--parallel=1` to each stage to avoid this; a healthy build sits at
 ~100 % CPU.
 
-`RCAStudioII.qsf` needs `PRE_FLOW_SCRIPT_FILE = quartus_sh:sys/build_id.tcl`;
+`Studio-II.qsf` needs `PRE_FLOW_SCRIPT_FILE = quartus_sh:sys/build_id.tcl`;
 without it synthesis dies on the missing generated `build_id.v`.
 
 ### Verilator sims (`verilator/`)
@@ -310,12 +310,12 @@ cd verilator && make lint
 ```
 
 ### Loading software
-The OSD (`RCAStudioII.sv:206`) exposes:
+The OSD (`Studio-II.sv:206`) exposes:
 - `F0,rom` → BIOS, loaded to `$0000`
 - `F1,bin` → cartridge, loaded to `$0400`
 
 The BIOS is **not** embedded; it must be loaded from the OSD every boot, and
-`rom_loaded` (`RCAStudioII.sv:291`) only latches when `ioctl_index==0 &&
+`rom_loaded` (`Studio-II.sv:291`) only latches when `ioctl_index==0 &&
 ioctl_addr==100`, so the core is held in reset until a BIOS is loaded.
 
 ---
@@ -450,7 +450,7 @@ two pads", not correct against incorrect. Note the frame harness cannot
 distinguish them: retail Tennis does not visibly respond to held stick input in
 these scenarios.
 
-### 6.3 Top level — `RCAStudioII.sv`
+### 6.3 Top level — `Studio-II.sv`
 - **The BIOS is not embedded**, so the core is held in reset until one is loaded
   from the OSD. This is the single biggest piece of user-facing friction left.
 - **Analog video is emitted but has never been seen on a TV.** The raster is
@@ -537,7 +537,7 @@ model does; the first three are directed tests and should not move at all.
 - Quartus 17.0.x. Do not edit anything under `sys/` — it is the shared MiSTer
   framework and is overwritten on updates.
 - Add new sources to `files.qip` by hand (Quartus writes them into
-  `RCAStudioII.qsf` instead; move them). Keep `verilator/Makefile`'s `V_SRC` in
+  `Studio-II.qsf` instead; move them). Keep `verilator/Makefile`'s `V_SRC` in
   sync with `files.qip`.
 - Keep the PLL in `rtl/pll*`; the framework requires it there.
 - Prefer deleting dead code over commenting it out. This tree is already hard to
@@ -671,7 +671,7 @@ CPU at `$13xx`, and the CPU is not driving the bus during DMA. Both planes
 arrive in the same cycle with matched latency.
 
 The four colours are fixed RGB values, not combinations of three colour pins, so
-they cannot ride the `{R,G,B}` bus the 1864 defined. `RCAStudioII.sv` applies the
+they cannot ride the `{R,G,B}` bus the 1864 defined. `Studio-II.sv` applies the
 palette; the bus still carries a 3-bit approximation so the Verilator harness
 keeps working unchanged.
 
@@ -694,7 +694,7 @@ difference rather than a capture artefact, so the core uses MAME's values. The
 same capture is a structural check the core passes: same field, same two dashed
 lanes, same car sprites. Nothing in the test suite could have caught this —
 `tools/visicom-test.sh` works in colour *letters*, and the RGB lives in
-`RCAStudioII.sv`, which the Verilator harness does not compile.
+`Studio-II.sv`, which the Verilator harness does not compile.
 
 Verified by `tools/visicom-test.sh` (new): five built-in games and six
 cartridges, each locked to the exact set of colours it puts on screen, after the

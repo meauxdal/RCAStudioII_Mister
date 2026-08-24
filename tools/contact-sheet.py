@@ -33,7 +33,7 @@ PAL_STD = {" ": (0,0,0), "#": (255,255,255), "B": (0,0,208), "G": (0,208,0),
            "C": (0,208,208), "R": (208,0,0), "M": (208,0,208), "Y": (208,208,0)}
 # The Visicom's four are fixed hardware values, and its G is the dark green
 # background rather than a foreground green. These are MAME's VISICOM_PALETTE,
-# which a hardware capture backs over Emma 02's -- see the note in RCAStudioII.sv.
+# which a hardware capture backs over Emma 02's -- see the note in Studio-II.sv.
 PAL_VIS = {" ": (0,0x40,0), "G": (0,0x40,0), "C": (0xAF,0xDF,0xE4),
            "Y": (0xB9,0xC4,0x2F), "R": (0xEF,0x45,0x4A)}
 

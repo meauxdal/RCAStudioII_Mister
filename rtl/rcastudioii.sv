@@ -253,7 +253,7 @@ cdp1862 cdp1862
 );
 
 // The Visicom's four colours do not fit a 1-bit-per-channel bus, so the exact
-// palette is applied at the top level (RCAStudioII.sv) from vis_index. What
+// palette is applied at the top level (Studio-II.sv) from vis_index. What
 // goes out here is the nearest 3-bit approximation, which is what the Verilator
 // harness captures -- the four colours stay distinguishable in a PNG or an
 // ASCII dump, which is all that side needs.
@@ -332,7 +332,7 @@ reg  [9:0] playerB = 10'h0;
 // keys vary by game. A CRC16 of the image is taken while it downloads and looked up
 // in a table below; the result selects one of a few profiles.
 //
-// MiSTer joystick bits, per the CONF_STR "J1,..." list in RCAStudioII.sv:
+// MiSTer joystick bits, per the CONF_STR "J1,..." list in Studio-II.sv:
 //   [0]=right [1]=left [2]=down [3]=up   [4]=Fire   [5]=Extra   [6]=Start
 //   [7]=Select(CLEAR, folded into reset by the top level)
 //   [17:8]=A0..A9   [27:18]=B0..B9.
@@ -764,7 +764,7 @@ end
 // the menu, and "Joystick" is the profile itself. There is no longer a magic
 // "0 = auto" value inside the profile enum, so every one of the 16 encodings --
 // MAP_NONE included -- is selectable, and the top level can display the
-// detected profile in the same row the user would edit (see RCAStudioII.sv).
+// detected profile in the same row the user would edit (see Studio-II.sv).
 assign     auto_profile = no_cart ? builtin_profile : map_profile;
 wire [3:0] profile      = joy_manual ? joy_override : auto_profile;
 

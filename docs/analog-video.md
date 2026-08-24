@@ -89,7 +89,7 @@ expect, not a report.
 
 ### How the signal gets out
 
-`RCAStudioII.sv` wires:
+`Studio-II.sv` wires:
 
 ```
 CLK_VIDEO  = clk_sys                (7.04 MHz)
@@ -119,7 +119,7 @@ not a VGA-monitor rate. So:
 
 ### Test procedure
 
-1. Build: `tools/quartus-build.sh` → `output_files/RCAStudioII.rbf`. Copy to
+1. Build: `tools/quartus-build.sh` → `output_files/Studio-II.rbf`. Copy to
    `/media/fat/_Console/`.
 2. Fit an **analog IO board**. Without one the VGA connector is not driven.
 3. Start with a CRT/SCART and `forced_scandoubler=0` in `MiSTer.ini`. Load the

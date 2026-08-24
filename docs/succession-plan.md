@@ -738,7 +738,7 @@ on** and there is no disable port at all.
   This started as port B of the main RAM, whose read half was unused, and that
   was wrong in a way nothing in simulation could show — see "the 8,000 ALMs"
   below.
-- The palette is applied in `RCAStudioII.sv`, which is the only place wide enough
+- The palette is applied in `Studio-II.sv`, which is the only place wide enough
   for it. `video[2:0]` still carries a 3-bit approximation so the Verilator
   harness and anything else with three wires keeps working.
 - `st2_pg_ok` had to learn that `$08` and `$09` are cartridge space here. All six
@@ -767,7 +767,7 @@ The capture is also a structural check, and the core passes it: same dark green
 field, same two dashed lane lines, same car sprites in the same two colours. Only
 the horizontal inset differs, which is the capture's own framing. Note the frame
 comparison could not have caught the palette — `tools/visicom-test.sh` works in
-colour *letters*, and the RGB values live in `RCAStudioII.sv`, which the Verilator
+colour *letters*, and the RGB values live in `Studio-II.sv`, which the Verilator
 harness does not even compile.
 
 ### Verification

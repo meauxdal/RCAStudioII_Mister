@@ -206,7 +206,7 @@ assign BUTTONS = 0;
 
 `include "build_id.v"
 localparam CONF_STR = {
-	"RCA-StudioII;v6;",
+	"Studio-II;v6;",
 	"F1,ST2BINROM,Load Cartridge;",
 	// Index 2, not 0: menu loads carry the picked file's *extension* index in
 	// ioctl_index[7:6] (BIN=0, ROM=1), which collides with the bootN.rom slot

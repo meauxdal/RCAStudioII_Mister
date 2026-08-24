@@ -82,7 +82,7 @@ wire audio;   // 1-bit beeper, gated by the 1802's Q line
 // The sim keeps ce_pix tied high by default: one pixel per clk_48 edge. Frame
 // content is normally identical to hardware (everything inside the core is
 // gated on ce_pix), the sim just doesn't burn 4 host cycles per pixel.
-// RCAStudioII.sv divides by 4 for the real 1.76MHz timebase. With ce_div4 set,
+// Studio-II.sv divides by 4 for the real 1.76MHz timebase. With ce_div4 set,
 // the sim runs the same /4 divider as the FPGA top so phase-sensitive
 // behaviour can be reproduced (see the port comment).
 reg [1:0] ce_cnt = 2'd0;

@@ -75,5 +75,5 @@ tools/refemu/out/
 
 # Elle's ignores (Quartus Design Space Explorer files)
 /dse
-RCAStudioII.dse
+Studio-II.dse
 *.log

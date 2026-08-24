@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
 # Build the MiSTer core with Quartus 17.0.2 inside the raetro/quartus:mister
-# container. Produces output_files/RCAStudioII.rbf.
+# container. Produces output_files/Studio-II.rbf.
 #
 #   tools/quartus-build.sh              # full build: map, fit, asm, sta
 #   tools/quartus-build.sh map          # analysis & synthesis only (~1.5 min)
@@ -20,7 +20,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IMAGE="${QUARTUS_IMAGE:-raetro/quartus:mister}"
-PROJ=RCAStudioII
+PROJ=Studio-II
 STAGE="${1:-all}"
 
 docker image inspect "$IMAGE" >/dev/null 2>&1 || {
